@@ -9,10 +9,20 @@ using namespace std;
 
 enum stuff
 {
+    TRIGGER_COMBAT_START,
     TRIGGER_ACTION_MANUAL,
     TRIGGER_TURN_START,
     TRIGGER_TURN_END,
     TRIGGER_BEFORE_ATTACK,
+    TRIGGER_MOVE,
+    TRIGGER_MOVE_FIRST, // is also a move
+    TRIGGER_MOVE_SECOND, // is also a move
+
+    TRIGGER_SOUL_OWN_TURN,
+    TRIGGER_SOUL_ALLIED_TURN,
+    TRIGGER_SOUL_FOE_TURN,
+    TRIGGER_SOUL_OWN_OR_ALLIED_TURN = TRIGGER_SOUL_OWN_TURN | TRIGGER_SOUL_ALLIED_TURN,
+    TRIGGER_SOUL_ANY_TURN = TRIGGER_SOUL_OWN_TURN | TRIGGER_SOUL_ALLIED_TURN | TRIGGER_SOUL_FOE_TURN,
 
     // unit allowed to make a step on start/end of it's turn
     COUNTER_RAPID_MOVE_AVAILABLE,
@@ -27,8 +37,17 @@ enum stuff
     COUNTER_CURSEPROOF,
     COUNTER_FREE_MOVEMENT,
     COUNTER_SUPER_ARMOR,
+    COUNTER_PHYSICAL_ARMOR,
     COUNTER_ALTERED_MV,
     COUNTER_ALTERED_DF,
+    COUNTER_IS_2X2,
+
+    // When choosing to MOVE again, destroys walls and absorbs corpses it moves over, mutating each time
+    UPGRADE_BALL_OF_LIMBS,
+    // When absorbing allies, slays instead of obliterating them, and this unit mutates.
+    UPGRADE_MELD,
+    // If absorb destroys a unit, gains physical armor for the rest of combat
+    UPGRADE_FORM_CARAPACE,
 
     TAKE_ACTION_RAPID_MOVE,
     TAKE_ACTION_ANCILLARY_LIMBS,
@@ -42,11 +61,25 @@ enum stuff
     SELECT_TOKEN_ONLY_NEGATIVE,
     SELECT_TOKEN_ONLY_POSITIVE,
 
+    SELECT_SPACE_ANY,
+    SELECT_SPACE_FREE,
+
     DAMAGE_TOXIN,
     DAMAGE_NORMAL,
     DAMAGE_GRAZE,
     DAMAGE_FIRE,
     DAMAGE_CURSE,
+    DAMAGE_DEVIL,
+
+    ARMOR_NONE,
+    ARMOR_PHYSICAL,
+    ARMOR_MAGIC,
+    ARMOR_SUPER,
+
+    FACTION_IGORRI,
+
+    UNIT_TYRANT,
+    UNIT_NECROMANCER,
 };
 
 
@@ -55,7 +88,8 @@ enum select_unit_filter
     SELECT_UNIT_EXCLUDE_NONE,
     SELECT_UNIT_EXCLUDE_SELF,
     SELECT_UNIT_EXCLUDE_ALLY,
-    SELECT_UNIT_EXCLUDE_ENEMY,
+    SELECT_UNIT_EXCLUDE_FOE,
+    SELECT_UNIT_WITH_POSITIVE_TOKENS,
     SELECT_UNIT_WITH_NEGATIVE_TOKENS,
     SELECT_UNIT_WITH_MUTATION_TOKENS,
     SELECT_UNIT_WITHOUT_CURSEPROOF,
@@ -79,6 +113,8 @@ enum movement_tags
     MOVEMENT_DEFAULT,
     MOVEMENT_FREE,
     MOVEMENT_IGNORE_HAZARDS,
+    MOVEMENT_DESTROY_WALLS,
+    MOVEMENT_ABSORB_CORPSES,
 };
 
 
@@ -112,7 +148,9 @@ struct unit_context
     virtual bool is_ally(unit_context &) const = 0;
     virtual void take_damage(int x, int type, bool *dead = nullptr) = 0;
     virtual map_pos pos() const = 0;
+    virtual bool has_upgrade(int) const = 0;
 
+    virtual int size() const { return counter(COUNTER_IS_2X2) ? 2 : 1; }
     virtual bool is_curseproof() const { return counter(COUNTER_CURSEPROOF) > 0; }
 };
 
@@ -121,12 +159,16 @@ struct token_context
 {
     virtual ~token_context() = default;
     virtual int count() const = 0;
+    virtual bool is_positive() const = 0;
+    virtual token_type type() const = 0;
 };
 
 
 struct unit_action_context
 {
     virtual ~unit_action_context() = default;
+
+    virtual int trigger() const = 0;
 
     virtual unit_context &self() = 0;
     virtual unit_context &activated() = 0;
@@ -141,10 +183,11 @@ struct unit_action_context
     virtual optional<int> player_must_select_token_count(int up_to_x) = 0;
     virtual optional<int> player_must_select_corpse_count(int up_to_x) = 0;
     virtual optional<token_type> player_may_select_token_type(const list<token_type> &token_types) = 0;
+    virtual optional<token_type> player_must_select_token_type(const list<token_type> &token_types) = 0;
     virtual token_context *player_may_select_token(const list<token_context *> &tokens, int filter = SELECT_TOKEN_ANY) = 0;
     virtual unit_context *player_must_select_unit(const list<unit_context *> &units) = 0;
     virtual list<unit_context *> player_must_select_line(int) = 0;
-    virtual optional<map_pos> player_must_select_free_space(const map_pos &, int range) = 0;
+    virtual optional<map_pos> player_must_select_free_space(const map_pos &, int range, int filter = SELECT_SPACE_ANY) = 0;
     virtual bool player_may_take_action(int) = 0;
     virtual bool player_may_spend_soul(int x) = 0;
     virtual int player_roll_d6(unit_context &who, int tags = ROLL_TAG_NONE) = 0;
@@ -152,6 +195,7 @@ struct unit_action_context
 
     // TODO: may unit trigger something on step and die? then it should be [[no_discard]] bool unit_step
     virtual bool is_hit(unit_context &target, int d6) const = 0;
+    virtual void unit_move(unit_context &, movement_tags extra_tags = MOVEMENT_DEFAULT, int *walls_destroyed = nullptr, int *corpses_absorved = nullptr) = 0;
     virtual void unit_step(unit_context &, int range = 1, movement_tags tags = MOVEMENT_DEFAULT) = 0;
     virtual void obliterate(unit_context &) = 0;
     virtual int inc_corpse(const map_pos &, int x = 0) = 0;
@@ -172,6 +216,131 @@ struct action
     trigger t;
     action_foo foo = nullptr;
 };
+
+
+struct unit_card_context
+{
+    virtual ~unit_card_context() = default;
+    virtual void set_faction_type(int faction, int type) = 0;
+    virtual void set_stats(int mv, int hp, int df, int arm) = 0;
+
+    virtual void set_move_override(action_foo) = 0;
+    virtual void add_upgrade(int) = 0;
+
+    virtual void add_trait(int trigger, action_foo) = 0;
+    virtual void add_bonus_trait(int trigger, action_foo) = 0;
+
+    virtual void add_act_ability(action_foo) = 0;
+    virtual void add_upgrade_act_ability(action_foo) = 0;
+
+    virtual void add_soul_ability(int trigger, action_foo) = 0;
+    virtual void add_upgrade_soul_ability(int trigger, action_foo) = 0;
+};
+
+
+// Starts combat with 4 mutation tokens
+void warpflesh(unit_action_context &c)
+{
+    c.self().add_token(TOKEN_MUTATION, +4);
+}
+
+
+// 2x2 unit
+void tyrant(unit_action_context &c)
+{
+    c.self().set_counter(COUNTER_IS_2X2, 1);
+}
+
+
+// Self Effect: Gain 1 strength, OR 1 speed, OR 1 vitality. Spare parts: Repeat this effect once for each corpse consumed.
+void sculpt_flesh(unit_action_context &c)
+{
+    int times = max(1, c.player_may_spare_parts(c.self()));
+
+    while (times--) {
+        optional<token_type> t = c.player_must_select_token_type({TOKEN_STRENGTH, TOKEN_SPEED, TOKEN_VITALITY});
+        if (!t)
+            return;
+
+        c.self().add_token(*t);
+    }
+}
+
+
+// Melee Effect: Deal 1 devil damage to an adjacent unit. If reduce to 0 hp, obliterates unit and the homunculus gains any tokens the absorbed unit had.
+void absorb(unit_action_context &c)
+{
+    list<unit_context *> us = c.self().units_in_range(1);
+    if (us.empty())
+        return c.no_target();
+
+    unit_context *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    if (!c.is_hit(*u, c.player_roll_d6(c.self(), ROLL_TAG_ATTACK)))
+        return u->take_damage(1, DAMAGE_GRAZE);
+
+    bool dead = false;
+    u->take_damage(1, DAMAGE_DEVIL, &dead);
+    if (!dead)
+        return;
+
+    if (c.self().has_upgrade(UPGRADE_MELD))
+        c.mutate(c.self());
+    else
+        c.obliterate(*u);
+
+    for (token_context *t : u->tokens())
+        c.self().add_token(t->type(), t->count());
+
+    if (c.self().has_upgrade(UPGRADE_FORM_CARAPACE))
+        c.self().inc_counter(COUNTER_PHYSICAL_ARMOR, +1);
+}
+
+
+// Flesh Whip: Attack, Range 1-2 On hit: 1 damage and splash (target): 1 damage and (4+) create one (6+) or two corpse tokens in an adjacent space to target.
+void flesh_whip(unit_action_context &c)
+{
+    list<unit_context *> us = c.self().units_in_range(1, 2);
+    if (us.empty())
+        return c.no_target();
+
+    unit_context *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    int d6 = c.player_roll_d6(c.self(), ROLL_TAG_ATTACK);
+    if (!c.is_hit(*u, d6))
+        return u->take_damage(1, DAMAGE_GRAZE);
+
+    u->take_damage(1, DAMAGE_NORMAL);
+
+    int n = c.d6_gradations(d6, {{1, 0}, {4, 1}, {6, 2}});
+    if (!n)
+        return;
+
+    optional<map_pos> p = c.player_must_select_free_space(u->pos(), 1);
+    if (!p)
+        return;
+
+    c.inc_corpse(*p, n);
+}
+
+
+void ball_of_limbs(unit_action_context &c)
+{
+    if (!c.self().has_upgrade(UPGRADE_BALL_OF_LIMBS) || c.trigger() != TRIGGER_MOVE_SECOND)
+        return;
+
+    int walls = -1;
+    int corpses = -1;
+    c.unit_move(c.self(), enum_or(MOVEMENT_DESTROY_WALLS, MOVEMENT_ABSORB_CORPSES), &walls, &corpses);
+
+    int times = walls + corpses;
+    while (times--)
+        c.mutate(c.self());
+}
 
 
 // At turn start, may convert one of this unit’s mutation tokens into strength, speed, or vitality. Then, mutate.
@@ -213,35 +382,36 @@ void accelerate_evolution(unit_action_context &c)
 }
 
 
-// May remove a mutation token at start of own turn to step 2.
-void rapid_move_ts(unit_action_context &c)
+// May remove a mutation token at start or end of own turn to step 2.
+void rapid_move(unit_action_context &c)
 {
-    c.self().inc_counter(COUNTER_RAPID_MOVE_AVAILABLE, +1);
-    token_context *t = c.self().find_token(TOKEN_MUTATION);
-    if (!t)
-        return c.no_resources();
-    if (!c.player_may_take_action(TAKE_ACTION_RAPID_MOVE))
-        return;
+    if (c.trigger() & TRIGGER_TURN_START) {
+        c.self().inc_counter(COUNTER_RAPID_MOVE_AVAILABLE, +1);
+        token_context *t = c.self().find_token(TOKEN_MUTATION);
+        if (!t)
+            return c.no_resources();
+        if (!c.player_may_take_action(TAKE_ACTION_RAPID_MOVE))
+            return;
 
-    c.self().remove_token(*t);
-    c.unit_step(c.self(), 2);
-    c.self().inc_counter(COUNTER_RAPID_MOVE_AVAILABLE, -1);
-}
-
-
-// May remove a mutation token at end of own turn to step 2.
-void rapid_move_te(unit_action_context &c)
-{
-    bool rm_available = c.self().counter(COUNTER_RAPID_MOVE_AVAILABLE);
-    token_context *t = c.self().find_token(TOKEN_MUTATION);
-    if (!rm_available || !t)
-        return c.no_resources();
-
-    if (c.player_may_take_action(TAKE_ACTION_RAPID_MOVE)) {
         c.self().remove_token(*t);
         c.unit_step(c.self(), 2);
+        c.self().inc_counter(COUNTER_RAPID_MOVE_AVAILABLE, -1);
+        return;
     }
-    c.self().set_counter(COUNTER_RAPID_MOVE_AVAILABLE, 0);
+
+    if (c.trigger() & TRIGGER_TURN_END) {
+        bool rm_available = c.self().counter(COUNTER_RAPID_MOVE_AVAILABLE);
+        token_context *t = c.self().find_token(TOKEN_MUTATION);
+        if (!rm_available || !t)
+            return c.no_resources();
+
+        if (c.player_may_take_action(TAKE_ACTION_RAPID_MOVE)) {
+            c.self().remove_token(*t);
+            c.unit_step(c.self(), 2);
+        }
+        c.self().set_counter(COUNTER_RAPID_MOVE_AVAILABLE, 0);
+        return;
+    }
 }
 
 
@@ -279,7 +449,7 @@ void new_material(unit_action_context &c)
     int cs = c.d6_gradations(d6, {{1, 1}, {3, 2}, {5, 3}});
     int n = 0;
     while (cs--) {
-        optional<map_pos> p = c.player_must_select_free_space(c.self().pos(), 1);
+        optional<map_pos> p = c.player_must_select_free_space(c.self().pos(), 1, SELECT_SPACE_FREE);
         if (p) {
             c.inc_corpse(*p, +1);
             ++n;
@@ -298,13 +468,13 @@ void new_material(unit_action_context &c)
 // Range 2. Effect: Create a perfect copy of an allied unit in range in any other free space in range. Then obliterate the original as it collapses into flesh and replace it with a corpse token.
 void clone(unit_action_context &c)
 {
-    list<unit_context *> us = c.self().units_in_range(2, enum_or(SELECT_UNIT_EXCLUDE_SELF, SELECT_UNIT_EXCLUDE_ENEMY));
+    list<unit_context *> us = c.self().units_in_range(2, enum_or(SELECT_UNIT_EXCLUDE_SELF, SELECT_UNIT_EXCLUDE_FOE));
     if (us.empty())
         return c.no_target();
     unit_context *u = c.player_must_select_unit(us);
     if (!u)
         return;
-    optional<map_pos> p = c.player_must_select_free_space(c.self().pos(), 2);
+    optional<map_pos> p = c.player_must_select_free_space(c.self().pos(), 2, SELECT_SPACE_FREE);
     if (!p)
         return c.no_target();
     c.copy_unit(*u, *p);
@@ -458,15 +628,90 @@ void chaos_beam(unit_action_context &c)
 }
 
 
+// (1 SOUL): Own or Allied Turn, Range 4. Trigger: Turn start. Effect: Unit gains 1 strength, (3-4) OR 1 speed, (5-6) OR 1 vitality. Spare Parts: May choose one token per corpse consumed instead of rolling.
+void wild_mutation(unit_action_context &c)
+{
+    list<unit_context *> us = c.self().units_in_range(4);
+    if (us.empty())
+        return c.no_target();
+
+    if (c.player_may_spend_soul(1))
+        return c.no_resources();
+
+    unit_context *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    int spare_parts = c.player_may_spare_parts(c.self());
+    list<token_type> ts;
+
+    if (spare_parts) {
+        while (spare_parts--) {
+            optional<token_type> t = c.player_must_select_token_type({TOKEN_STRENGTH, TOKEN_SPEED, TOKEN_VITALITY});
+            if (!t)
+                break;
+            ts.push_back(*t);
+        }
+    } else {
+        switch (c.player_roll_d6(c.self())) {
+            case 1:
+            case 2:
+                ts.push_back(TOKEN_STRENGTH);
+                break;
+            case 3:
+            case 4:
+                ts.push_back(TOKEN_SPEED);
+                break;
+            case 5:
+            case 6:
+                ts.push_back(TOKEN_VITALITY);
+                break;
+        }
+    }
+    for (token_type t : ts)
+        u->add_token(t);
+}
+
+
+// (3 SOUL): Own or allied turn. Range 4. Copy all positive tokens on target unit, then grant them to another unit in range.
+void sample_genome(unit_action_context &c)
+{
+    list<unit_context *> srcs = c.self().units_in_range(4, SELECT_UNIT_WITH_POSITIVE_TOKENS);
+    if (srcs.empty())
+        return c.no_target();
+
+    list<unit_context *> dsts = c.self().units_in_range(4);
+    if (dsts.size() < 2)
+        return c.no_target();
+
+    if (c.player_may_spend_soul(3))
+        return c.no_resources();
+
+    unit_context *src = c.player_must_select_unit(srcs);
+    if (!src)
+        return;
+
+    dsts.remove(src);
+    unit_context *dst = c.player_must_select_unit(dsts);
+    if (!dst)
+        return;
+
+    for (token_context *t : src->tokens()) {
+        if (t->is_positive())
+            dst->add_token(t->type(), t->count());
+    }
+}
+
+
 // (1 SOUL): Own or allied turn. Range 3. Effect: Swap places with an allied unit, then both of you mutate.
 void flesh_jump(unit_action_context &c)
 {
-    if (!c.player_may_spend_soul(1))
-        return c.no_resources();
-
-    list<unit_context *> us = c.self().units_in_range(3, enum_or(SELECT_UNIT_EXCLUDE_SELF, SELECT_UNIT_EXCLUDE_ENEMY));
+    list<unit_context *> us = c.self().units_in_range(3, enum_or(SELECT_UNIT_EXCLUDE_SELF, SELECT_UNIT_EXCLUDE_FOE));
     if (us.empty())
         return c.no_target();
+
+    if (!c.player_may_spend_soul(1))
+        return c.no_resources();
 
     unit_context *u = c.player_must_select_unit(us);
     if (!u)
@@ -483,12 +728,12 @@ void flesh_jump(unit_action_context &c)
 // (2 SOUL): Own or allied turn. Range 3. Effect: Remove any number of mutation tokens on self or target unit, then target may step 2 per token removed with free movement, ignoring hazards.
 void grow_bonus_legs(unit_action_context &c)
 {
-    if (!c.player_may_spend_soul(2))
-        return c.no_resources();
-
     list<unit_context *> us = c.self().units_in_range(3, SELECT_UNIT_WITH_MUTATION_TOKENS);
     if (us.empty())
         return c.no_target();
+
+    if (!c.player_may_spend_soul(2))
+        return c.no_resources();
 
     unit_context *u = c.player_must_select_unit(us);
     if (!u)
@@ -509,12 +754,12 @@ void grow_bonus_legs(unit_action_context &c)
 // (2 SOUL): Own or allied turn. Range 3. Trigger: Turn start. Effect: Remove any number of mutation tokens from target, then target gains +1D on attacks this turn per token removed, and their damage ignores armor.
 void grow_bonus_limbs(unit_action_context &c)
 {
-    if (!c.player_may_spend_soul(2))
-        return c.no_resources();
-
     list<unit_context *> us = c.self().units_in_range(3, SELECT_UNIT_WITH_MUTATION_TOKENS);
     if (us.empty())
         return c.no_target();
+
+    if (!c.player_may_spend_soul(2))
+        return c.no_resources();
 
     unit_context *u = c.player_must_select_unit(us);
     if (!u)
@@ -535,19 +780,19 @@ void grow_bonus_limbs(unit_action_context &c)
 // (3 SOUL): Curse, Any turn. Trigger: Turn end. Effect: Deal 1 toxic damage to unit. If this reduces them to 0 hp, they are obliterated. Create up to 3 corpse tokens under their space or in free adjacent spaces.
 void recycle(unit_action_context &c)
 {
-    if (!c.player_may_spend_soul(3))
-        return c.no_resources();
-
     unit_context &u = c.activated();
     if (u.is_curseproof())
         return c.no_target();
+
+    if (!c.player_may_spend_soul(3))
+        return c.no_resources();
 
     bool dead = false;
     u.take_damage(1, DAMAGE_TOXIN, &dead);
     if (!dead)
         return;
     c.obliterate(u);
-    optional<map_pos> p = c.player_must_select_free_space(u.pos(), 1);
+    optional<map_pos> p = c.player_must_select_free_space(u.pos(), 1, SELECT_SPACE_FREE);
     if (!p)
         return;
     optional<int> n = c.player_must_select_corpse_count(3);
@@ -560,12 +805,12 @@ void recycle(unit_action_context &c)
 // (4 SOUL): Curse, Foe turn. Range 3. Trigger: Turn start. Effect: Inflict 1 slow, weak, and vulnerable on a foe (5+) twice.
 void devolve(unit_action_context &c)
 {
-    if (!c.player_may_spend_soul(4))
-        return c.no_resources();
-
     unit_context &u = c.activated();
     if (u.is_curseproof())
         return c.no_target();
+
+    if (!c.player_may_spend_soul(4))
+        return c.no_resources();
 
     int d6 = c.player_roll_d6(c.self(), ROLL_TAG_CURSE);
     int times = c.d6_gradations(d6, {{1, 1}, {5, 2}});
@@ -580,6 +825,9 @@ void devolve(unit_action_context &c)
 // (6 SOUL): Own turn. Trigger: Turn start. Effect: Increase MV to 6, DF to 6+, gain 6 strength, become curseproof, gain free movement, and gain super armor. Keep any damage taken. At the end of your next turn, your form destabilizes and you are obliterated.
 void final_form(unit_action_context &c)
 {
+    if (!c.player_may_spend_soul(6))
+        return c.no_resources();
+
     c.self().inc_counter(COUNTER_CURSEPROOF, +1);
     c.self().inc_counter(COUNTER_CURSEPROOF, +1);
     c.self().inc_counter(COUNTER_FREE_MOVEMENT, +1);
@@ -591,30 +839,53 @@ void final_form(unit_action_context &c)
     c.self().set_counter(COUNTER_FINAL_FORM, 2);
 }
 
-list<action> chirurgeon_actions()
+
+void homonculus(unit_card_context &c)
 {
-    return {
-        {TRIGGER_TURN_START, polyglot},
-        {TRIGGER_TURN_END, accelerate_evolution},
-        {TRIGGER_TURN_START, rapid_move_ts}, {TRIGGER_TURN_END, rapid_move_te},
-        {TRIGGER_BEFORE_ATTACK, ancillary_limbs},
+    c.set_faction_type(FACTION_IGORRI, UNIT_TYRANT);
+    c.set_stats(4, 6, 3, ARMOR_NONE);
 
-        {TRIGGER_ACTION_MANUAL, experimental_surgery},
-        {TRIGGER_ACTION_MANUAL, new_material},
-        {TRIGGER_ACTION_MANUAL, clone},
-        {TRIGGER_ACTION_MANUAL, stitch_fix},
-        {TRIGGER_ACTION_MANUAL, inject_stimulant},
-        {TRIGGER_ACTION_MANUAL, biotoxin_injector},
-        {TRIGGER_ACTION_MANUAL, mutagen_injector},
-        {TRIGGER_ACTION_MANUAL, chaos_beam},
+    c.add_trait(TRIGGER_COMBAT_START, warpflesh);
+    c.add_trait(TRIGGER_COMBAT_START, tyrant);
 
-        {TRIGGER_ACTION_MANUAL, flesh_jump},
-        {TRIGGER_ACTION_MANUAL, grow_bonus_legs},
-        {TRIGGER_ACTION_MANUAL, grow_bonus_limbs},
-        {TRIGGER_TURN_END, recycle},
-        {TRIGGER_TURN_START, devolve},
-        {TRIGGER_TURN_START, final_form},
-    };
+    c.add_act_ability(sculpt_flesh);
+    c.add_act_ability(absorb);
+    c.add_act_ability(flesh_whip);
+
+    c.add_upgrade(UPGRADE_BALL_OF_LIMBS);
+    c.add_upgrade(UPGRADE_MELD);
+    c.add_upgrade(UPGRADE_FORM_CARAPACE);
+    c.set_move_override(ball_of_limbs);
+}
+
+
+void chirurgeon(unit_card_context &c)
+{
+    c.set_faction_type(FACTION_IGORRI, UNIT_NECROMANCER);
+    c.set_stats(4, 10, 3, ARMOR_MAGIC);
+
+    c.add_trait(TRIGGER_TURN_START, polyglot);
+    c.add_bonus_trait(TRIGGER_TURN_END, accelerate_evolution);
+    c.add_bonus_trait(enum_or(TRIGGER_TURN_START, TRIGGER_TURN_END), rapid_move);
+    c.add_bonus_trait(TRIGGER_BEFORE_ATTACK, ancillary_limbs);
+
+    c.add_act_ability(experimental_surgery);
+    c.add_upgrade_act_ability(new_material);
+    c.add_upgrade_act_ability(clone);
+    c.add_upgrade_act_ability(stitch_fix);
+    c.add_upgrade_act_ability(inject_stimulant);
+    c.add_upgrade_act_ability(biotoxin_injector);
+    c.add_upgrade_act_ability(mutagen_injector);
+    c.add_upgrade_act_ability(chaos_beam);
+
+    c.add_soul_ability(enum_or(TRIGGER_SOUL_OWN_OR_ALLIED_TURN, TRIGGER_TURN_START), wild_mutation);
+    c.add_soul_ability(TRIGGER_SOUL_OWN_OR_ALLIED_TURN, sample_genome);
+    c.add_upgrade_soul_ability(TRIGGER_SOUL_OWN_OR_ALLIED_TURN, flesh_jump);
+    c.add_upgrade_soul_ability(TRIGGER_SOUL_OWN_OR_ALLIED_TURN, grow_bonus_legs);
+    c.add_upgrade_soul_ability(TRIGGER_SOUL_OWN_OR_ALLIED_TURN, grow_bonus_limbs);
+    c.add_upgrade_soul_ability(enum_or(TRIGGER_SOUL_ANY_TURN, TRIGGER_TURN_END), recycle);
+    c.add_upgrade_soul_ability(enum_or(TRIGGER_SOUL_FOE_TURN, TRIGGER_TURN_START), devolve);
+    c.add_upgrade_soul_ability(enum_or(TRIGGER_SOUL_OWN_TURN, TRIGGER_TURN_START), final_form);
 }
 
 int main()
