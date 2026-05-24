@@ -45,6 +45,12 @@ enum stuff
     COUNTER_FLIGHT,
     COUNTER_IS_2X2,
 
+    // If starting turn in range 2 of a corpse, may step 2
+    UPGRADE_THE_HUNGER,
+    // At turn start, may deal 1 damage to self, ignoring armor, to generate     a corpse in an adjacent space
+    UPGRADE_AUTOPHAGIA,
+    // May use corpses as cover spaces
+    UPGRADE_HUNCH,
     // Regurgitate has a 5+ effect chance to strip a token of your choice from each foe in the area.
     UPGRADE_DROWN_IN_VISCERA,
     // May mutate once for each corpse created with Regurgitate instead.
@@ -60,6 +66,7 @@ enum stuff
 
     TAKE_ACTION_RAPID_MOVE,
     TAKE_ACTION_ANCILLARY_LIMBS,
+    TAKE_ACTION_AUTOPHAGIA,
     TAKE_ACTION_STEP,
 
     ROLL_TAG_NONE,
@@ -84,6 +91,7 @@ enum stuff
 
     FACTION_IGORRI,
 
+    UNIT_HORROR,
     UNIT_HUNTER,
     UNIT_TYRANT,
     UNIT_NECROMANCER,
@@ -161,6 +169,7 @@ struct unit_context
 
     virtual list<unit_context *> units_in_range(int, select_unit_filter exclude = SELECT_UNIT_EXCLUDE_NONE) const = 0;
     virtual list<unit_context *> units_in_range(int, int, select_unit_filter exclude = SELECT_UNIT_EXCLUDE_NONE) const = 0;
+    virtual int corpses_in_range(int) const = 0;
     virtual bool is_ally(unit_context &) const = 0;
     virtual void take_damage(int x, int type, bool *dead = nullptr) = 0;
     virtual map_pos pos() const = 0;
@@ -325,6 +334,72 @@ void regurgitate_cleansing_wash(unit_action_context &c, unit_context *target)
         return;
 
     u->remove_token(*t);
+}
+
+
+void the_hunger(unit_action_context &c)
+{
+    if (!c.self().has_upgrade(UPGRADE_THE_HUNGER))
+        return;
+
+    if (c.self().corpses_in_range(2))
+        c.unit_step(c.self(), 2);
+}
+
+
+void autophagia(unit_action_context &c)
+{
+    if (!c.self().has_upgrade(UPGRADE_AUTOPHAGIA))
+        return;
+
+    if (!c.player_may_take_action(TAKE_ACTION_AUTOPHAGIA))
+        return;
+
+    optional<map_pos> p = c.player_must_select_space(c.self().pos(), 1, 1);
+    if (!p)
+        return;
+
+    c.self().take_damage(1, DAMAGE_DEVIL);
+    c.inc_corpse(*p, +1);
+}
+
+
+// Self Effect: Mutate, then gain 1 strength. Spare Parts: Then gain (3+) 1 speed, (5+) and 1 vitality, (6+) then mutate again. Roll 1D per corpse consumed for the effect.
+void bloodgorger(unit_action_context &c)
+{
+    c.mutate(c.self());
+    c.self().add_token(TOKEN_STRENGTH);
+
+    int times = c.player_may_spare_parts(c.self());
+    while (times--) {
+        int d6 = c.player_roll_d6(c.self());
+        if (d6 >= 3)
+            c.self().add_token(TOKEN_SPEED);
+        if (d6 >= 5)
+            c.self().add_token(TOKEN_VITALITY);
+        if (d6 >= 6)
+            c.mutate(c.self());
+    }
+}
+
+// Melee, Attack On hit: 1 damage. Effect: splash (self): 1 damage.
+void bloody_slashes(unit_action_context &c)
+{
+    list<unit_context *> us = c.self().units_in_range(1);
+    if (us.empty())
+        return c.no_target();
+
+    unit_context *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    if (!c.is_hit(*u, c.player_roll_d6(c.self(), ROLL_TAG_ATTACK)))
+        return u->take_damage(1, DAMAGE_GRAZE);
+
+    u->take_damage(1, DAMAGE_NORMAL);
+    list<unit_context *> splash = u->units_in_range(1, 1);
+    for (unit_context *u : splash)
+        u->take_damage(1, DAMAGE_NORMAL);
 }
 
 
@@ -982,6 +1057,26 @@ void final_form(unit_action_context &c)
     c.self().add_token(TOKEN_STRENGTH, 6);
 
     c.self().set_counter(COUNTER_FINAL_FORM, 2);
+}
+
+
+void lycan(unit_card_context &c)
+{
+    c.set_faction_type(FACTION_IGORRI, UNIT_HORROR);
+    c.set_stats(4, 4, 4, ARMOR_NONE);
+
+    // TODO: how to implement lope?
+    // c.add_trait(TRIGGER_COMBAT_START, lope);
+    c.add_trait(TRIGGER_TURN_START, the_hunger);
+    c.add_trait(TRIGGER_TURN_START, autophagia);
+
+    c.add_act_ability(bloodgorger);
+    c.add_act_ability(bloody_slashes);
+
+    c.add_upgrade(UPGRADE_THE_HUNGER);
+    c.add_upgrade(UPGRADE_AUTOPHAGIA);
+    // TODO: how to implement it?
+    c.add_upgrade(UPGRADE_HUNCH);
 }
 
 
