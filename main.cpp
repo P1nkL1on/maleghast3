@@ -19,6 +19,8 @@ enum stuff
     TRIGGER_MOVE,
     TRIGGER_MOVE_FIRST, // is also a move
     TRIGGER_MOVE_SECOND, // is also a move
+    TRIGGER_AFTER_MOVE,
+    TRIGGER_ON_SLAIN,
 
     TRIGGER_SOUL_OWN_TURN,
     TRIGGER_SOUL_ALLIED_TURN,
@@ -44,7 +46,21 @@ enum stuff
     COUNTER_ALTERED_DF,
     COUNTER_FLIGHT,
     COUNTER_IS_2X2,
+    COUNTER_COST_HALF_UNIT_SLOT,
+    COUNTER_ACTIVATED_TWO_AT_A_TIME,
 
+    // Twisting Strike gains Effect (5+): steal a positive token from target.
+    UPGRADE_GENESTEALER,
+    // Twisting Strike may cause an adjacent ally to mutate.
+    UPGRADE_SPREAD_MUTATE,
+    // May step 1 (4+) or 3 spaced before Unstable Mutation.
+    UPGRADE_WARPING_MUTATE,
+    // May grant one of the tokens stolen by Purge to another unit in range.
+    UPGRADE_ABSORB,
+    // Purge deals 1 piercing toxic damage to foes.
+    UPGRADE_SCOUR_FLESH,
+    // If targeting self, Marriage also clears all negative tokens on target first.
+    UPGRADE_CONJOIN,
     // If starting turn in range 2 of a corpse, may step 2
     UPGRADE_THE_HUNGER,
     // At turn start, may deal 1 damage to self, ignoring armor, to generate     a corpse in an adjacent space
@@ -64,33 +80,43 @@ enum stuff
     // If absorb destroys a unit, gains physical armor for the rest of combat
     UPGRADE_FORM_CARAPACE,
 
+    // ask a player, will it do it when it may?
     TAKE_ACTION_RAPID_MOVE,
     TAKE_ACTION_ANCILLARY_LIMBS,
     TAKE_ACTION_AUTOPHAGIA,
     TAKE_ACTION_STEP,
 
+    // what bonus types can be applied to a roll?
     ROLL_TAG_NONE,
     ROLL_TAG_CURSE,
     ROLL_TAG_ATTACK,
 
+    // which tokens to select?
     SELECT_TOKEN_ANY,
     SELECT_TOKEN_ONLY_NEGATIVE,
     SELECT_TOKEN_ONLY_POSITIVE,
 
+    // can it be negated by armor?
     DAMAGE_TOXIN,
     DAMAGE_NORMAL,
     DAMAGE_GRAZE,
     DAMAGE_FIRE,
     DAMAGE_CURSE,
     DAMAGE_DEVIL,
+    DAMAGE_PIERCING,
 
+    // what dmg types can be decreased?
     ARMOR_NONE,
     ARMOR_PHYSICAL,
     ARMOR_MAGIC,
     ARMOR_SUPER,
 
+    // factions
     FACTION_IGORRI,
 
+    // unit type
+    UNIT_THRALL,
+    UNIT_FREAK,
     UNIT_HORROR,
     UNIT_HUNTER,
     UNIT_TYRANT,
@@ -105,6 +131,7 @@ enum select_unit_filter
     SELECT_UNIT_EXCLUDE_ALLY,
     SELECT_UNIT_EXCLUDE_FOE,
 
+    SELECT_UNIT_WITH_TOKENS,
     SELECT_UNIT_WITH_POSITIVE_TOKENS,
     SELECT_UNIT_WITH_NEGATIVE_TOKENS,
     SELECT_UNIT_WITH_MUTATION_TOKENS,
@@ -151,38 +178,39 @@ struct map_pos
 };
 
 
-struct token_context;
+struct ttoken;
 
 
-struct unit_context
+struct tunit
 {
-    virtual ~unit_context() = default;
-    virtual list<token_context *> tokens() = 0;
+    virtual ~tunit() = default;
+    virtual list<ttoken *> tokens() = 0;
     virtual int n_tokens(int filter = SELECT_TOKEN_ANY) const = 0;
-    virtual token_context *find_token(token_type type) = 0;
-    virtual bool remove_token(token_context &, int count = 1) = 0;
+    virtual ttoken *find_token(token_type type) = 0;
+    virtual bool remove_token(ttoken &, int count = 1) = 0;
     virtual void add_token(token_type type, int count = 1) = 0;
 
     virtual int inc_counter(int counter, int x, int def_value = 0) = 0;
     virtual void set_counter(int counter, int x) = 0;
     virtual int counter(int counter, int def_value = 0) const = 0;
 
-    virtual list<unit_context *> units_in_range(int, select_unit_filter exclude = SELECT_UNIT_EXCLUDE_NONE) const = 0;
-    virtual list<unit_context *> units_in_range(int, int, select_unit_filter exclude = SELECT_UNIT_EXCLUDE_NONE) const = 0;
+    virtual list<tunit *> units_in_range(int, select_unit_filter exclude = SELECT_UNIT_EXCLUDE_NONE) const = 0;
+    virtual list<tunit *> units_in_range(int, int, select_unit_filter exclude = SELECT_UNIT_EXCLUDE_NONE) const = 0;
     virtual int corpses_in_range(int) const = 0;
-    virtual bool is_ally(unit_context &) const = 0;
+    virtual bool is_ally(tunit &) const = 0;
     virtual void take_damage(int x, int type, bool *dead = nullptr) = 0;
     virtual map_pos pos() const = 0;
     virtual bool has_upgrade(int) const = 0;
+    virtual int unit_type() const = 0;
 
     virtual int size() const { return counter(COUNTER_IS_2X2) ? 2 : 1; }
     virtual bool is_curseproof() const { return counter(COUNTER_CURSEPROOF) > 0; }
 };
 
 
-struct token_context
+struct ttoken
 {
-    virtual ~token_context() = default;
+    virtual ~ttoken() = default;
     virtual int count() const = 0;
     virtual bool is_positive() const = 0;
     virtual token_type type() const = 0;
@@ -195,8 +223,8 @@ struct unit_action_context
 
     virtual int trigger() const = 0;
 
-    virtual unit_context &self() = 0;
-    virtual unit_context &activated() = 0;
+    virtual tunit &self() = 0;
+    virtual tunit &activated() = 0;
     // splits the turn to the atomic actions, that can't be interrupted
     virtual bool then() = 0;
     // prevent action, because no target
@@ -209,40 +237,35 @@ struct unit_action_context
     virtual optional<int> player_must_select_corpse_count(int up_to_x) = 0;
     virtual optional<token_type> player_may_select_token_type(const list<token_type> &token_types) = 0;
     virtual optional<token_type> player_must_select_token_type(const list<token_type> &token_types) = 0;
-    virtual token_context *player_may_select_token(const list<token_context *> &tokens, int filter = SELECT_TOKEN_ANY) = 0;
-    virtual token_context *player_must_select_token(const list<token_context *> &tokens, int filter = SELECT_TOKEN_ANY) = 0;
-    virtual unit_context *player_must_select_unit(const list<unit_context *> &units) = 0;
-    virtual list<unit_context *> player_must_select_line(int) = 0;
+    virtual ttoken *player_may_select_token(const list<ttoken *> &tokens, int filter = SELECT_TOKEN_ANY) = 0;
+    virtual ttoken *player_must_select_token(const list<ttoken *> &tokens, int filter = SELECT_TOKEN_ANY) = 0;
+    virtual tunit *player_may_select_unit(const list<tunit *> &units, const list<tunit *> &exclude = {}) = 0;
+    virtual tunit *player_must_select_unit(const list<tunit *> &units, const list<tunit *> &exclude = {}) = 0;
+    virtual list<tunit *> player_must_select_units(const list<tunit *> &units, int min, int max) = 0;
+    virtual list<tunit *> player_must_select_line(int) = 0;
     virtual optional<map_pos> player_must_select_space(const map_pos &, int range, select_space_filter filter = SELECT_SPACE_ANY) = 0;
     virtual optional<map_pos> player_must_select_space(const map_pos &, int min, int max, select_space_filter filter = SELECT_SPACE_ANY) = 0;
     virtual bool player_may_take_action(int) = 0;
     virtual bool player_may_spend_soul(int x) = 0;
-    virtual int player_roll_d6(unit_context &who, int tags = ROLL_TAG_NONE) = 0;
+    virtual int player_roll_d6(tunit &who, int tags = ROLL_TAG_NONE) = 0;
     virtual int d6_gradations(int d6, const map<int, int> &treshold_to_result = {}) const = 0;
 
-    virtual bool is_hit(unit_context &target, int d6) const = 0;
-    virtual void unit_move(unit_context &, movement_tags extra_tags = MOVEMENT_DEFAULT, int *walls_destroyed = nullptr, int *corpses_absorved = nullptr) = 0;
+    virtual bool is_hit(tunit &target, int d6) const = 0;
+    virtual void unit_move(tunit &, movement_tags extra_tags = MOVEMENT_DEFAULT, int *walls_destroyed = nullptr, int *corpses_absorved = nullptr) = 0;
     // TODO: may unit trigger something on step and die? then it should be [[no_discard]] bool unit_step
-    virtual void unit_step(unit_context &, int range = 1, movement_tags tags = MOVEMENT_DEFAULT) = 0;
-    virtual void obliterate(unit_context &) = 0;
+    virtual void unit_step(tunit &, int range = 1, movement_tags tags = MOVEMENT_DEFAULT) = 0;
+    virtual void slay(tunit &) = 0;
+    virtual void obliterate(tunit &) = 0;
     virtual int inc_corpse(const map_pos &, int x = 0) = 0;
-    virtual unit_context &copy_unit(unit_context &, const map_pos &new_pos) = 0;
-    virtual void swap_unit_pos(unit_context &, unit_context &) = 0;
+    virtual tunit &copy_unit(tunit &, const map_pos &new_pos) = 0;
+    virtual void swap_unit_pos(tunit &, tunit &) = 0;
 
-    virtual void mutate(unit_context &) = 0;
-    virtual int player_may_spare_parts(unit_context &) = 0;
+    virtual void mutate(tunit &unit) { unit.add_token(TOKEN_MUTATION, +1); }
+    virtual int player_may_spare_parts(tunit &) = 0;
 };
 
 
-using trigger = int;
 using action_foo = void(*)(unit_action_context &);
-
-
-struct action
-{
-    trigger t;
-    action_foo foo = nullptr;
-};
 
 
 struct unit_card_context
@@ -286,18 +309,27 @@ void tyrant(unit_action_context &c)
 }
 
 
-void regurgitate_drown_in_viscera(unit_action_context &c, unit_context *target)
+// 2 of these units are worth 1 unit slot. Can be activated two at a time.
+void thrall(unit_action_context &c)
+{
+    c.self().set_counter(COUNTER_COST_HALF_UNIT_SLOT, 1);
+    c.self().set_counter(COUNTER_ACTIVATED_TWO_AT_A_TIME, 1);
+}
+
+
+
+void regurgitate_drown_in_viscera(unit_action_context &c, tunit *target)
 {
     if (c.player_roll_d6(c.self()) < 5)
         return;
 
-    list<unit_context *> us = target->units_in_range(1, 1, enum_or(SELECT_UNIT_EXCLUDE_ALLY, SELECT_UNIT_WITH_NEGATIVE_TOKENS));
+    list<tunit *> us = target->units_in_range(1, 1, enum_or(SELECT_UNIT_EXCLUDE_ALLY, SELECT_UNIT_WITH_NEGATIVE_TOKENS));
     if (us.empty())
         return;
 
     set<token_type> ts;
-    for (unit_context *u : us) {
-        for (token_context *t : u->tokens())
+    for (tunit *u : us) {
+        for (ttoken *t : u->tokens())
             ts.insert(t->type());
     }
 
@@ -308,32 +340,214 @@ void regurgitate_drown_in_viscera(unit_action_context &c, unit_context *target)
     if (!tt)
         return;
 
-    for (unit_context *u : us) {
-        token_context *t = u->find_token(*tt);
+    for (tunit *u : us) {
+        ttoken *t = u->find_token(*tt);
         if (t)
             u->remove_token(*t, 1);
     }
 }
 
 
-void regurgitate_cleansing_wash(unit_action_context &c, unit_context *target)
+void regurgitate_cleansing_wash(unit_action_context &c, tunit *target)
 {
     if (c.player_roll_d6(c.self()) < 5)
         return;
 
-    list<unit_context *> us = target->units_in_range(1, 1, enum_or(SELECT_UNIT_EXCLUDE_FOE, SELECT_UNIT_WITH_NEGATIVE_TOKENS));
+    list<tunit *> us = target->units_in_range(1, 1, enum_or(SELECT_UNIT_EXCLUDE_FOE, SELECT_UNIT_WITH_NEGATIVE_TOKENS));
     if (us.empty())
         return;
 
-    unit_context *u = c.player_must_select_unit(us);
+    tunit *u = c.player_must_select_unit(us);
     if (!u)
         return;
 
-    token_context *t = c.player_must_select_token(u->tokens(), SELECT_TOKEN_ONLY_NEGATIVE);
+    ttoken *t = c.player_must_select_token(u->tokens(), SELECT_TOKEN_ONLY_NEGATIVE);
     if (!t)
         return;
 
     u->remove_token(*t);
+}
+
+
+// When slain, leaves an extra corpse token in an adjacent space.
+void fall_to_shambles(unit_action_context &c)
+{
+    optional<map_pos> p = c.player_must_select_space(c.self().pos(), 1, 1);
+    if (!p)
+        return;
+
+    c.inc_corpse(*p, +1);
+}
+
+// Self.Effect: Gain 1 strength, (4+) 1 speed, (5+) and 1 vitality, (6+) and explode for splash (self): 1 damage. Spare parts: Roll +1D per corpse and pick the highest result.
+void unstable_mutation(unit_action_context &c)
+{
+    if (c.self().has_upgrade(UPGRADE_WARPING_MUTATE) && c.player_may_take_action(TAKE_ACTION_STEP)) {
+        int d6 = c.player_roll_d6(c.self());
+        int x = c.d6_gradations(d6, {{0, 1}, {4, 3}});
+        c.unit_step(c.self(), x);
+    }
+
+    int corpses = c.player_may_spare_parts(c.self());
+    int rolls = 1 + corpses;
+    int best = 0;
+    while (rolls--)
+        best = max(best, c.player_roll_d6(c.self()));
+
+    c.self().add_token(TOKEN_STRENGTH, 1);
+    if (best >= 4)
+        c.self().add_token(TOKEN_SPEED, 1);
+    if (best >= 5)
+        c.self().add_token(TOKEN_VITALITY, 1);
+    if (best >= 6) {
+        for (tunit *u : c.self().units_in_range(1, 1))
+            u->take_damage(1, DAMAGE_NORMAL);
+    }
+}
+
+
+// Attack, Melee. Effect: Mutate. On hit: 1 damage.
+void twisting_strike(unit_action_context &c)
+{
+    list<tunit *> us = c.self().units_in_range(1);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    tunit *m = &c.self();
+    if (c.self().has_upgrade(UPGRADE_SPREAD_MUTATE)) {
+        m = c.player_must_select_unit(c.self().units_in_range(1, SELECT_UNIT_EXCLUDE_FOE));
+        if (!m)
+            return;
+    }
+    c.mutate(*m);
+
+    int d6 = c.player_roll_d6(c.self(), ROLL_TAG_ATTACK);
+    if (!c.is_hit(*u, d6))
+        return u->take_damage(1, DAMAGE_GRAZE);
+
+    u->take_damage(1, DAMAGE_NORMAL);
+
+    if (c.self().has_upgrade(UPGRADE_GENESTEALER) && d6 >= 5 && u->n_tokens(SELECT_TOKEN_ONLY_POSITIVE)) {
+        list<ttoken *> ts = u->tokens();
+        ttoken *t = c.player_may_select_token(ts);
+        if (!t)
+            return;
+
+        u->remove_token(*t);
+        c.self().add_token(t->type());
+    }
+}
+
+
+// After MOVEing, drop a corpse in a free adjacent space.
+void leftovers(unit_action_context &c)
+{
+    if (c.player_roll_d6(c.self()) < 4)
+        return;
+
+    optional<map_pos> p = c.player_must_select_space(c.self().pos(), 1, SELECT_SPACE_FREE);
+    if (!p)
+        return;
+
+    c.inc_corpse(*p, +1);
+}
+
+
+// Range 3. Effect: One or two units in range mutate. Spare parts: and also dole out 1 strength per corpse consumed.
+void inject_mutagen(unit_action_context &c)
+{
+    list<tunit *> us = c.self().units_in_range(3);
+    if (us.empty())
+        return c.no_target();
+
+    us = c.player_must_select_units(us, 1, 2);
+    if (us.empty())
+        return;
+
+    int tokens = c.player_may_spare_parts(c.self());
+    for (tunit *u : us) {
+        c.mutate(*u);
+        if (tokens)
+            u->add_token(TOKEN_STRENGTH, tokens);
+    }
+}
+
+
+// Curse, Range 1-3. Effect: A unit in range removes one token of this unit's choice (3+): two (5+): all.
+void purge(unit_action_context &c)
+{
+    list<tunit *> us = c.self().units_in_range(3, SELECT_UNIT_WITH_TOKENS);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    int d6 = c.player_roll_d6(c.self());
+    int tokens = c.d6_gradations(d6, {{0, 1}, {3, 2}, {5, -1}});
+    list<ttoken *> stolen;
+    while (tokens--) {
+        ttoken *t = c.player_may_select_token(u->tokens());
+        if (!t)
+            break;
+        u->remove_token(*t, 1);
+        stolen.push_back(t);
+    }
+
+    if (c.self().has_upgrade(UPGRADE_SCOUR_FLESH) && !u->is_ally(c.self()))
+        u->take_damage(1, enum_or(DAMAGE_TOXIN, DAMAGE_PIERCING));
+
+    if (c.self().has_upgrade(UPGRADE_ABSORB)) {
+        list<tunit *> us = c.self().units_in_range(3);
+        if (us.empty())
+            return;
+
+        tunit *another = c.player_may_select_unit(us, {u});
+        if (!another)
+            return;
+
+        ttoken *t = c.player_may_select_token(stolen);
+        if (t)
+            return;
+
+        another->add_token(t->type());
+    }
+}
+
+
+// Marriage: Range 1-2. Effect: Instantly slay self or an allied unit in range. Another allied unit in range gains 2 speed, vitality, and strength, or just 1 if the slain unit was a thrall.
+void marriage(unit_action_context &c)
+{
+    list<tunit *> us = c.self().units_in_range(1, 2);
+    if (us.size() < 2)
+        return c.no_target();
+
+    list<tunit *> srcs = us;
+    srcs.push_back(&c.self());
+    tunit *src = c.player_must_select_unit(srcs);
+    if (!src)
+        return;
+
+    tunit *dst = c.player_must_select_unit(us);
+    if (!dst)
+        return;
+
+    int x = src->unit_type() == UNIT_THRALL ? 1 : 2;
+    c.slay(*src);
+
+    if (c.self().has_upgrade(UPGRADE_CONJOIN) && src == &c.self()) {
+        for (ttoken *t : dst->tokens())
+            dst->remove_token(*t, t->count());
+    }
+
+    dst->add_token(TOKEN_SPEED, x);
+    dst->add_token(TOKEN_VITALITY, x);
+    dst->add_token(TOKEN_STRENGTH, x);
 }
 
 
@@ -359,7 +573,7 @@ void autophagia(unit_action_context &c)
     if (!p)
         return;
 
-    c.self().take_damage(1, DAMAGE_DEVIL);
+    c.self().take_damage(1, enum_or(DAMAGE_NORMAL, DAMAGE_PIERCING));
     c.inc_corpse(*p, +1);
 }
 
@@ -385,11 +599,11 @@ void bloodgorger(unit_action_context &c)
 // Melee, Attack On hit: 1 damage. Effect: splash (self): 1 damage.
 void bloody_slashes(unit_action_context &c)
 {
-    list<unit_context *> us = c.self().units_in_range(1);
+    list<tunit *> us = c.self().units_in_range(1);
     if (us.empty())
         return c.no_target();
 
-    unit_context *u = c.player_must_select_unit(us);
+    tunit *u = c.player_must_select_unit(us);
     if (!u)
         return;
 
@@ -397,8 +611,8 @@ void bloody_slashes(unit_action_context &c)
         return u->take_damage(1, DAMAGE_GRAZE);
 
     u->take_damage(1, DAMAGE_NORMAL);
-    list<unit_context *> splash = u->units_in_range(1, 1);
-    for (unit_context *u : splash)
+    list<tunit *> splash = c.self().units_in_range(1, 1);
+    for (tunit *u : splash)
         u->take_damage(1, DAMAGE_NORMAL);
 }
 
@@ -406,15 +620,15 @@ void bloody_slashes(unit_action_context &c)
 // Range 2-4 Effect: Splash (target): Create a corpse in the area for every unit in the area, up to three times, then mutate.
 void regurgitate(unit_action_context &c)
 {
-    list<unit_context *> us = c.self().units_in_range(2, 4);
+    list<tunit *> us = c.self().units_in_range(2, 4);
     if (us.empty())
         return c.no_target();
 
-    unit_context *u = c.player_must_select_unit(us);
+    tunit *u = c.player_must_select_unit(us);
     if (!u)
         return;
 
-    list<unit_context *> splash = u->units_in_range(1, SELECT_UNIT_EXCLUDE_SELF);
+    list<tunit *> splash = u->units_in_range(1, SELECT_UNIT_EXCLUDE_SELF);
     int corpses = min(3, (int)splash.size());
     int mutations = c.self().has_upgrade(UPGRADE_RAPID_ADAPTATION) ? corpses : 1;
 
@@ -441,11 +655,11 @@ void regurgitate(unit_action_context &c)
 // Range 2-4, Attack On hit: 1 damage. Effect: Steal a positive token from target. Spare Parts: plus one more token per corpse consumed. If target has no positive tokens, gain 1 strength instead of stealing a token
 void sin_eater(unit_action_context &c)
 {
-    list<unit_context *> us = c.self().units_in_range(2, 4);
+    list<tunit *> us = c.self().units_in_range(2, 4);
     if (us.empty())
         return c.no_target();
 
-    unit_context *u = c.player_must_select_unit(us);
+    tunit *u = c.player_must_select_unit(us);
     if (!u)
         return;
 
@@ -461,7 +675,7 @@ void sin_eater(unit_action_context &c)
 
     int times = 1 + c.player_may_spare_parts(c.self());
     while (times--) {
-        token_context *t = c.player_may_select_token(u->tokens());
+        ttoken *t = c.player_may_select_token(u->tokens());
         if (!t)
             return;
         u->remove_token(*t, 1);
@@ -488,11 +702,11 @@ void sculpt_flesh(unit_action_context &c)
 // Melee Effect: Deal 1 devil damage to an adjacent unit. If reduce to 0 hp, obliterates unit and the homunculus gains any tokens the absorbed unit had.
 void absorb(unit_action_context &c)
 {
-    list<unit_context *> us = c.self().units_in_range(1);
+    list<tunit *> us = c.self().units_in_range(1);
     if (us.empty())
         return c.no_target();
 
-    unit_context *u = c.player_must_select_unit(us);
+    tunit *u = c.player_must_select_unit(us);
     if (!u)
         return;
 
@@ -509,7 +723,7 @@ void absorb(unit_action_context &c)
     else
         c.obliterate(*u);
 
-    for (token_context *t : u->tokens())
+    for (ttoken *t : u->tokens())
         c.self().add_token(t->type(), t->count());
 
     if (c.self().has_upgrade(UPGRADE_FORM_CARAPACE))
@@ -520,11 +734,11 @@ void absorb(unit_action_context &c)
 // Flesh Whip: Attack, Range 1-2 On hit: 1 damage and splash (target): 1 damage and (4+) create one (6+) or two corpse tokens in an adjacent space to target.
 void flesh_whip(unit_action_context &c)
 {
-    list<unit_context *> us = c.self().units_in_range(1, 2);
+    list<tunit *> us = c.self().units_in_range(1, 2);
     if (us.empty())
         return c.no_target();
 
-    unit_context *u = c.player_must_select_unit(us);
+    tunit *u = c.player_must_select_unit(us);
     if (!u)
         return;
 
@@ -533,7 +747,7 @@ void flesh_whip(unit_action_context &c)
         return u->take_damage(1, DAMAGE_GRAZE);
 
     // self + splash
-    for (unit_context *near : u->units_in_range(1))
+    for (tunit *near : u->units_in_range(1))
         u->take_damage(1, DAMAGE_NORMAL);
 
     int n = c.d6_gradations(d6, {{1, 0}, {4, 1}, {6, 2}});
@@ -566,7 +780,7 @@ void ball_of_limbs(unit_action_context &c)
 // At turn start, may convert one of this unit’s mutation tokens into strength, speed, or vitality. Then, mutate.
 void polyglot(unit_action_context &c)
 {
-    token_context *t = c.self().find_token(TOKEN_MUTATION);
+    ttoken *t = c.self().find_token(TOKEN_MUTATION);
     if (!t)
         return c.no_resources();
     optional<token_type> tt = c.player_may_select_token_type({TOKEN_STRENGTH, TOKEN_SPEED, TOKEN_VITALITY});
@@ -583,17 +797,17 @@ void polyglot(unit_action_context &c)
 // At turn end, may remove one token from this unit and grant to a unit in range 2.
 void accelerate_evolution(unit_action_context &c)
 {
-    list<token_context *> ts = c.self().tokens();
+    list<ttoken *> ts = c.self().tokens();
     if (ts.empty())
         return c.no_resources();
-    list<unit_context *> us = c.self().units_in_range(2);
+    list<tunit *> us = c.self().units_in_range(2);
     if (us.empty())
         return c.no_target();
 
-    token_context *t = c.player_may_select_token(ts);
+    ttoken *t = c.player_may_select_token(ts);
     if (!t)
         return;
-    unit_context *u = c.player_must_select_unit(us);
+    tunit *u = c.player_must_select_unit(us);
     if (!u)
         return;
 
@@ -607,7 +821,7 @@ void rapid_move(unit_action_context &c)
 {
     if (c.trigger() & TRIGGER_TURN_START) {
         c.self().inc_counter(COUNTER_RAPID_MOVE_AVAILABLE, +1);
-        token_context *t = c.self().find_token(TOKEN_MUTATION);
+        ttoken *t = c.self().find_token(TOKEN_MUTATION);
         if (!t)
             return c.no_resources();
         if (!c.player_may_take_action(TAKE_ACTION_RAPID_MOVE))
@@ -621,7 +835,7 @@ void rapid_move(unit_action_context &c)
 
     if (c.trigger() & TRIGGER_TURN_END) {
         bool rm_available = c.self().counter(COUNTER_RAPID_MOVE_AVAILABLE);
-        token_context *t = c.self().find_token(TOKEN_MUTATION);
+        ttoken *t = c.self().find_token(TOKEN_MUTATION);
         if (!rm_available || !t)
             return c.no_resources();
 
@@ -638,7 +852,7 @@ void rapid_move(unit_action_context &c)
 // May remove a mutation token on self to grant +1D on any attack and allow it to ignore cover.
 void ancillary_limbs(unit_action_context &c)
 {
-    token_context *t = c.self().find_token(TOKEN_MUTATION);
+    ttoken *t = c.self().find_token(TOKEN_MUTATION);
     if (!t)
         return c.no_resources();
     if (!c.player_may_take_action(TAKE_ACTION_ANCILLARY_LIMBS))
@@ -650,8 +864,8 @@ void ancillary_limbs(unit_action_context &c)
 // Line 4. Line: 1 damage. Effect: Allies in the line mutate instead of taking damage.
 void experimental_surgery(unit_action_context &c)
 {
-    list<unit_context *> us = c.player_must_select_line(4);
-    for (unit_context *u : us) {
+    list<tunit *> us = c.player_must_select_line(4);
+    for (tunit *u : us) {
         if (c.self().is_ally(*u))
             c.mutate(*u);
         else
@@ -688,10 +902,10 @@ void new_material(unit_action_context &c)
 // Range 2. Effect: Create a perfect copy of an allied unit in range in any other free space in range. Then obliterate the original as it collapses into flesh and replace it with a corpse token.
 void clone(unit_action_context &c)
 {
-    list<unit_context *> us = c.self().units_in_range(2, enum_or(SELECT_UNIT_EXCLUDE_SELF, SELECT_UNIT_EXCLUDE_FOE));
+    list<tunit *> us = c.self().units_in_range(2, enum_or(SELECT_UNIT_EXCLUDE_SELF, SELECT_UNIT_EXCLUDE_FOE));
     if (us.empty())
         return c.no_target();
-    unit_context *u = c.player_must_select_unit(us);
+    tunit *u = c.player_must_select_unit(us);
     if (!u)
         return;
     optional<map_pos> p = c.player_must_select_space(c.self().pos(), 2, SELECT_SPACE_FREE);
@@ -710,17 +924,17 @@ void clone(unit_action_context &c)
 // Range 3. Effect: Remove up to three negative tokens from a unit, then it may step 1 and it mutates. Spare Parts: The unit mutates and steps once for each negative token removed instead.
 void stitch_fix(unit_action_context &c)
 {
-    list<unit_context *> us = c.self().units_in_range(3, SELECT_UNIT_WITH_NEGATIVE_TOKENS);
+    list<tunit *> us = c.self().units_in_range(3, SELECT_UNIT_WITH_NEGATIVE_TOKENS);
     if (us.empty())
         return c.no_target();
-    unit_context *u = c.player_must_select_unit(us);
+    tunit *u = c.player_must_select_unit(us);
     if (!u)
         return;
 
     int removed = 0;
     for (int i = 0; i < 3; ++i) {
-        list<token_context *> ts = u->tokens();
-        token_context *t = c.player_may_select_token(ts, SELECT_TOKEN_ONLY_NEGATIVE);
+        list<ttoken *> ts = u->tokens();
+        ttoken *t = c.player_may_select_token(ts, SELECT_TOKEN_ONLY_NEGATIVE);
         if (!t)
             break;
         removed++;
@@ -744,10 +958,10 @@ void stitch_fix(unit_action_context &c)
 // Range 3. Effect: Choose a unit in range. That unit may step 2. If it ends its turn in the space of a corpse, it mutates, removes the corpse, then may repeat this effect.
 void inject_stimulant(unit_action_context &c)
 {
-    list<unit_context *> us = c.self().units_in_range(3);
+    list<tunit *> us = c.self().units_in_range(3);
     if (us.empty())
         return c.no_target();
-    unit_context *u = c.player_must_select_unit(us);
+    tunit *u = c.player_must_select_unit(us);
     if (!u)
         return;
 
@@ -771,10 +985,10 @@ void inject_stimulant(unit_action_context &c)
 // Attack, range 2-5. On hit: 1 toxin damage. Effect: At end of target’s next turn, they explode for a splash (target) effect for 1 toxin damage. Your allies in the area mutate instead of taking damage.
 void biotoxin_injector(unit_action_context &c)
 {
-    list<unit_context *> us = c.self().units_in_range(2, 5);
+    list<tunit *> us = c.self().units_in_range(2, 5);
     if (us.empty())
         return c.no_target();
-    unit_context *u = c.player_must_select_unit(us);
+    tunit *u = c.player_must_select_unit(us);
     if (!u)
         return;
     if (!c.is_hit(*u, c.player_roll_d6(c.self(), ROLL_TAG_ATTACK)))
@@ -788,10 +1002,10 @@ void biotoxin_injector(unit_action_context &c)
 // Attack, Range 2-5. On hit: May remove one positive token from target, then deal 1 toxin damage. Spare Parts: Repeat this effect once.
 void mutagen_injector(unit_action_context &c)
 {
-    list<unit_context *> us = c.self().units_in_range(2, 5);
+    list<tunit *> us = c.self().units_in_range(2, 5);
     if (us.empty())
         return c.no_target();
-    unit_context *u = c.player_must_select_unit(us);
+    tunit *u = c.player_must_select_unit(us);
     if (!u)
         return;
     if (!c.is_hit(*u, c.player_roll_d6(c.self(), ROLL_TAG_ATTACK)))
@@ -799,8 +1013,8 @@ void mutagen_injector(unit_action_context &c)
 
     int effect = c.player_may_spare_parts(c.self()) ? 2 : 1;
     while (effect--) {
-        list<token_context *> ts = u->tokens();
-        token_context *t = c.player_may_select_token(ts, SELECT_TOKEN_ONLY_POSITIVE);
+        list<ttoken *> ts = u->tokens();
+        ttoken *t = c.player_may_select_token(ts, SELECT_TOKEN_ONLY_POSITIVE);
         if (!t)
             break;
         u->remove_token(*t);
@@ -811,7 +1025,7 @@ void mutagen_injector(unit_action_context &c)
 // Line 3. Effect: Line: 1 fire damage and inflict 1 vulnerable, (3-4) OR 1 toxic damage and inflict 1 slow, (5-6) OR 1 curse damage and inflict 1 weak. Spare Parts: Roll 1D for effect per corpse consumed and choose any result.
 void chaos_beam(unit_action_context &c)
 {
-    list<unit_context *> us = c.player_must_select_line(3);
+    list<tunit *> us = c.player_must_select_line(3);
 
     optional<int> effect;
     {
@@ -824,7 +1038,7 @@ void chaos_beam(unit_action_context &c)
     if (!effect)
         return;
 
-    for (unit_context *u : us) {
+    for (tunit *u : us) {
         switch (*effect) {
         case 1:
         case 2:
@@ -851,14 +1065,14 @@ void chaos_beam(unit_action_context &c)
 // (1 SOUL): Own or Allied Turn, Range 4. Trigger: Turn start. Effect: Unit gains 1 strength, (3-4) OR 1 speed, (5-6) OR 1 vitality. Spare Parts: May choose one token per corpse consumed instead of rolling.
 void wild_mutation(unit_action_context &c)
 {
-    list<unit_context *> us = c.self().units_in_range(4);
+    list<tunit *> us = c.self().units_in_range(4);
     if (us.empty())
         return c.no_target();
 
     if (c.player_may_spend_soul(1))
         return c.no_resources();
 
-    unit_context *u = c.player_must_select_unit(us);
+    tunit *u = c.player_must_select_unit(us);
     if (!u)
         return;
 
@@ -896,27 +1110,27 @@ void wild_mutation(unit_action_context &c)
 // (3 SOUL): Own or allied turn. Range 4. Copy all positive tokens on target unit, then grant them to another unit in range.
 void sample_genome(unit_action_context &c)
 {
-    list<unit_context *> srcs = c.self().units_in_range(4, SELECT_UNIT_WITH_POSITIVE_TOKENS);
+    list<tunit *> srcs = c.self().units_in_range(4, SELECT_UNIT_WITH_POSITIVE_TOKENS);
     if (srcs.empty())
         return c.no_target();
 
-    list<unit_context *> dsts = c.self().units_in_range(4);
+    list<tunit *> dsts = c.self().units_in_range(4);
     if (dsts.size() < 2)
         return c.no_target();
 
     if (c.player_may_spend_soul(3))
         return c.no_resources();
 
-    unit_context *src = c.player_must_select_unit(srcs);
+    tunit *src = c.player_must_select_unit(srcs);
     if (!src)
         return;
 
     dsts.remove(src);
-    unit_context *dst = c.player_must_select_unit(dsts);
+    tunit *dst = c.player_must_select_unit(dsts);
     if (!dst)
         return;
 
-    for (token_context *t : src->tokens()) {
+    for (ttoken *t : src->tokens()) {
         if (t->is_positive())
             dst->add_token(t->type(), t->count());
     }
@@ -926,14 +1140,14 @@ void sample_genome(unit_action_context &c)
 // (1 SOUL): Own or allied turn. Range 3. Effect: Swap places with an allied unit, then both of you mutate.
 void flesh_jump(unit_action_context &c)
 {
-    list<unit_context *> us = c.self().units_in_range(3, enum_or(SELECT_UNIT_EXCLUDE_SELF, SELECT_UNIT_EXCLUDE_FOE));
+    list<tunit *> us = c.self().units_in_range(3, enum_or(SELECT_UNIT_EXCLUDE_SELF, SELECT_UNIT_EXCLUDE_FOE));
     if (us.empty())
         return c.no_target();
 
     if (!c.player_may_spend_soul(1))
         return c.no_resources();
 
-    unit_context *u = c.player_must_select_unit(us);
+    tunit *u = c.player_must_select_unit(us);
     if (!u)
         return;
 
@@ -948,18 +1162,18 @@ void flesh_jump(unit_action_context &c)
 // (2 SOUL): Own or allied turn. Range 3. Effect: Remove any number of mutation tokens on self or target unit, then target may step 2 per token removed with free movement, ignoring hazards.
 void grow_bonus_legs(unit_action_context &c)
 {
-    list<unit_context *> us = c.self().units_in_range(3, SELECT_UNIT_WITH_MUTATION_TOKENS);
+    list<tunit *> us = c.self().units_in_range(3, SELECT_UNIT_WITH_MUTATION_TOKENS);
     if (us.empty())
         return c.no_target();
 
     if (!c.player_may_spend_soul(2))
         return c.no_resources();
 
-    unit_context *u = c.player_must_select_unit(us);
+    tunit *u = c.player_must_select_unit(us);
     if (!u)
         return;
 
-    token_context *t = u->find_token(TOKEN_MUTATION);
+    ttoken *t = u->find_token(TOKEN_MUTATION);
     optional<int> remove = c.player_must_select_token_count(t->count());
     if (!remove)
         return;
@@ -974,18 +1188,18 @@ void grow_bonus_legs(unit_action_context &c)
 // (2 SOUL): Own or allied turn. Range 3. Trigger: Turn start. Effect: Remove any number of mutation tokens from target, then target gains +1D on attacks this turn per token removed, and their damage ignores armor.
 void grow_bonus_limbs(unit_action_context &c)
 {
-    list<unit_context *> us = c.self().units_in_range(3, SELECT_UNIT_WITH_MUTATION_TOKENS);
+    list<tunit *> us = c.self().units_in_range(3, SELECT_UNIT_WITH_MUTATION_TOKENS);
     if (us.empty())
         return c.no_target();
 
     if (!c.player_may_spend_soul(2))
         return c.no_resources();
 
-    unit_context *u = c.player_must_select_unit(us);
+    tunit *u = c.player_must_select_unit(us);
     if (!u)
         return;
 
-    token_context *t = u->find_token(TOKEN_MUTATION);
+    ttoken *t = u->find_token(TOKEN_MUTATION);
     optional<int> remove = c.player_must_select_token_count(t->count());
     if (!remove)
         return;
@@ -1000,7 +1214,7 @@ void grow_bonus_limbs(unit_action_context &c)
 // (3 SOUL): Curse, Any turn. Trigger: Turn end. Effect: Deal 1 toxic damage to unit. If this reduces them to 0 hp, they are obliterated. Create up to 3 corpse tokens under their space or in free adjacent spaces.
 void recycle(unit_action_context &c)
 {
-    unit_context &u = c.activated();
+    tunit &u = c.activated();
     if (u.is_curseproof())
         return c.no_target();
 
@@ -1025,7 +1239,7 @@ void recycle(unit_action_context &c)
 // (4 SOUL): Curse, Foe turn. Range 3. Trigger: Turn start. Effect: Inflict 1 slow, weak, and vulnerable on a foe (5+) twice.
 void devolve(unit_action_context &c)
 {
-    unit_context &u = c.activated();
+    tunit &u = c.activated();
     if (u.is_curseproof())
         return c.no_target();
 
@@ -1057,6 +1271,40 @@ void final_form(unit_action_context &c)
     c.self().add_token(TOKEN_STRENGTH, 6);
 
     c.self().set_counter(COUNTER_FINAL_FORM, 2);
+}
+
+
+void stitch(unit_card_context &c)
+{
+    c.set_faction_type(FACTION_IGORRI, UNIT_THRALL);
+    c.set_stats(3, 2, 4, ARMOR_NONE);
+
+    c.add_trait(TRIGGER_ON_SLAIN, fall_to_shambles);
+    c.add_trait(TRIGGER_COMBAT_START, thrall);
+
+    c.add_act_ability(unstable_mutation);
+    c.add_act_ability(twisting_strike);
+
+    c.add_upgrade(UPGRADE_GENESTEALER);
+    c.add_upgrade(UPGRADE_SPREAD_MUTATE);
+    c.add_upgrade(UPGRADE_WARPING_MUTATE);
+}
+
+
+void chop_doc(unit_card_context &c)
+{
+    c.set_faction_type(FACTION_IGORRI, UNIT_FREAK);
+    c.set_stats(4, 4, 4, ARMOR_MAGIC);
+
+    c.add_trait(TRIGGER_AFTER_MOVE, leftovers);
+
+    c.add_act_ability(inject_mutagen);
+    c.add_act_ability(purge);
+    c.add_act_ability(marriage);
+
+    c.add_upgrade(UPGRADE_ABSORB);
+    c.add_upgrade(UPGRADE_SCOUR_FLESH);
+    c.add_upgrade(UPGRADE_CONJOIN);
 }
 
 
