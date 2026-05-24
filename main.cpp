@@ -458,9 +458,9 @@ struct unit_action_context
 using action_foo = void(*)(unit_action_context &);
 
 
-struct unit_card_context
+struct tcard
 {
-    virtual ~unit_card_context() = default;
+    virtual ~tcard() = default;
     virtual void set_faction_type(int faction, int type) = 0;
     virtual void set_stats(int mv, int hp, int df, int arm) = 0;
 
@@ -476,6 +476,17 @@ struct unit_card_context
     virtual void add_soul_ability(int trigger, action_foo) = 0;
     virtual void add_upgrade_soul_ability(int trigger, action_foo) = 0;
 };
+
+
+using unit_card = void(*)(tcard &);
+
+
+struct tfaction
+{
+    virtual ~tfaction() = default;
+    virtual void add_card(unit_card);
+};
+
 
 // *** ABILITIES AND TRAITS ***
 
@@ -2090,7 +2101,7 @@ void final_form(unit_action_context &c)
 }
 
 // *** UNITS ***
-void gunwight(unit_card_context &c)
+void gunwight(tcard &c)
 {
     c.set_faction_type(FACTION_CARCASS, UNIT_THRALL);
     c.set_stats(2, 2, 4, ARMOR_NONE);
@@ -2107,7 +2118,7 @@ void gunwight(unit_card_context &c)
 }
 
 
-void enforcer(unit_card_context &c)
+void enforcer(tcard &c)
 {
     c.set_faction_type(FACTION_CARCASS, UNIT_SCION);
     c.set_stats(3, 4, 3, ARMOR_PHYS);
@@ -2124,7 +2135,7 @@ void enforcer(unit_card_context &c)
 }
 
 
-void ammo_goblin(unit_card_context &c)
+void ammo_goblin(tcard &c)
 {
     c.set_faction_type(FACTION_CARCASS, UNIT_FREAK);
     c.set_stats(3, 4, 4, ARMOR_NONE);
@@ -2141,7 +2152,7 @@ void ammo_goblin(unit_card_context &c)
 }
 
 
-void barrelform(unit_card_context &c)
+void barrelform(tcard &c)
 {
     c.set_faction_type(FACTION_CARCASS, UNIT_HUNTER);
     c.set_stats(2, 4, 4, ARMOR_NONE);
@@ -2158,7 +2169,7 @@ void barrelform(unit_card_context &c)
 }
 
 
-void egis_weapon(unit_card_context &c)
+void egis_weapon(tcard &c)
 {
     c.set_faction_type(FACTION_CARCASS, UNIT_TYRANT);
     c.set_stats(3, 6, 2, ARMOR_PHYS);
@@ -2177,7 +2188,7 @@ void egis_weapon(unit_card_context &c)
 }
 
 
-void infiltrator(unit_card_context &c)
+void infiltrator(tcard &c)
 {
     c.set_faction_type(FACTION_CARCASS, UNIT_HUNTER);
     c.set_stats(3, 3, 3, ARMOR_MAG);
@@ -2195,7 +2206,7 @@ void infiltrator(unit_card_context &c)
 }
 
 
-void warhead(unit_card_context &c)
+void warhead(tcard &c)
 {
     c.set_faction_type(FACTION_GOREGRINDERS, UNIT_THRALL);
     c.set_stats(4, 1, 3, ARMOR_NONE);
@@ -2212,7 +2223,7 @@ void warhead(unit_card_context &c)
 }
 
 
-void carnifex(unit_card_context &c)
+void carnifex(tcard &c)
 {
     c.set_faction_type(FACTION_GOREGRINDERS, UNIT_SCION);
     c.set_stats(4, 4, 3, ARMOR_NONE);
@@ -2229,7 +2240,7 @@ void carnifex(unit_card_context &c)
 }
 
 
-void pain_ghoul(unit_card_context &c)
+void pain_ghoul(tcard &c)
 {
     c.set_faction_type(FACTION_GOREGRINDERS, UNIT_FREAK);
     c.set_stats(4, 4, 3, ARMOR_NONE);
@@ -2246,7 +2257,7 @@ void pain_ghoul(unit_card_context &c)
 }
 
 
-void painwheel(unit_card_context &c)
+void painwheel(tcard &c)
 {
     c.set_faction_type(FACTION_GOREGRINDERS, UNIT_HORROR);
     c.set_stats(5, 4, 3, ARMOR_NONE);
@@ -2263,7 +2274,7 @@ void painwheel(unit_card_context &c)
 }
 
 
-void berserker(unit_card_context &c)
+void berserker(tcard &c)
 {
     c.set_faction_type(FACTION_GOREGRINDERS, UNIT_TYRANT);
     c.set_stats(4, 6, 2, ARMOR_NONE);
@@ -2282,7 +2293,7 @@ void berserker(unit_card_context &c)
 }
 
 
-void gearhead(unit_card_context &c)
+void gearhead(tcard &c)
 {
     c.set_faction_type(FACTION_GOREGRINDERS, UNIT_FREAK);
     c.set_stats(4, 4, 3, ARMOR_NONE);
@@ -2299,7 +2310,7 @@ void gearhead(unit_card_context &c)
 }
 
 
-void scum(unit_card_context &c)
+void scum(tcard &c)
 {
     c.set_faction_type(FACTION_GARGAMOX, UNIT_THRALL);
     c.set_stats(3, 1, 3, ARMOR_SUPER);
@@ -2316,7 +2327,7 @@ void scum(unit_card_context &c)
 }
 
 
-void rotten(unit_card_context &c)
+void rotten(tcard &c)
 {
     c.set_faction_type(FACTION_GARGAMOX, UNIT_SCION);
     c.set_stats(4, 4, 3, ARMOR_PHYS);
@@ -2333,7 +2344,7 @@ void rotten(unit_card_context &c)
 }
 
 
-void leech(unit_card_context &c)
+void leech(tcard &c)
 {
     c.set_faction_type(FACTION_GARGAMOX, UNIT_FREAK);
     c.set_stats(4, 4, 4, ARMOR_MAG);
@@ -2350,7 +2361,7 @@ void leech(unit_card_context &c)
 }
 
 
-void host(unit_card_context &c)
+void host(tcard &c)
 {
     c.set_faction_type(FACTION_GARGAMOX, UNIT_HUNTER);
     c.set_stats(3, 4, 3, ARMOR_NONE);
@@ -2366,7 +2377,7 @@ void host(unit_card_context &c)
 }
 
 
-void slime(unit_card_context &c)
+void slime(tcard &c)
 {
     c.set_faction_type(FACTION_GARGAMOX, UNIT_HORROR);
     c.set_stats(4, 4, 4, ARMOR_NONE);
@@ -2382,7 +2393,7 @@ void slime(unit_card_context &c)
 }
 
 
-void belcher(unit_card_context &c)
+void belcher(tcard &c)
 {
     c.set_faction_type(FACTION_GARGAMOX, UNIT_THRALL);
     c.set_stats(3, 1, 4, ARMOR_NONE);
@@ -2399,7 +2410,7 @@ void belcher(unit_card_context &c)
 }
 
 
-void slimelet(unit_card_context &c)
+void slimelet(tcard &c)
 {
     c.set_faction_type(FACTION_GARGAMOX, UNIT_THRALL);
     c.set_stats(3, 1, 4, ARMOR_NONE);
@@ -2411,7 +2422,7 @@ void slimelet(unit_card_context &c)
 }
 
 
-void sacrifice(unit_card_context &c)
+void sacrifice(tcard &c)
 {
     c.set_faction_type(FACTION_DEADSOULS, UNIT_THRALL);
     c.set_stats(4, 2, 4, ARMOR_NONE);
@@ -2428,7 +2439,7 @@ void sacrifice(unit_card_context &c)
 }
 
 
-void chosen(unit_card_context &c)
+void chosen(tcard &c)
 {
     c.set_faction_type(FACTION_DEADSOULS, UNIT_SCION);
     c.set_stats(4, 3, 5, ARMOR_MAG);
@@ -2445,7 +2456,7 @@ void chosen(unit_card_context &c)
 }
 
 
-void visigheist(unit_card_context &c)
+void visigheist(tcard &c)
 {
     c.set_faction_type(FACTION_DEADSOULS, UNIT_HORROR);
     c.set_stats(4, 3, 5, ARMOR_MAG);
@@ -2461,7 +2472,7 @@ void visigheist(unit_card_context &c)
 }
 
 
-void banshee(unit_card_context &c)
+void banshee(tcard &c)
 {
     c.set_faction_type(FACTION_DEADSOULS, UNIT_HUNTER);
     c.set_stats(3, 3, 5, ARMOR_MAG);
@@ -2477,7 +2488,7 @@ void banshee(unit_card_context &c)
 }
 
 
-void bound_devil(unit_card_context &c)
+void bound_devil(tcard &c)
 {
     c.set_faction_type(FACTION_DEADSOULS, UNIT_TYRANT);
     c.set_stats(3, 6, 2, ARMOR_MAG);
@@ -2495,7 +2506,7 @@ void bound_devil(unit_card_context &c)
 }
 
 
-void lithogeist(unit_card_context &c)
+void lithogeist(tcard &c)
 {
     c.set_faction_type(FACTION_DEADSOULS, UNIT_HORROR);
     c.set_stats(0, 3, 3, ARMOR_SUPER);
@@ -2513,7 +2524,7 @@ void lithogeist(unit_card_context &c)
 }
 
 
-void penitent(unit_card_context &c)
+void penitent(tcard &c)
 {
     c.set_faction_type(FACTION_ABHORRER, UNIT_SCION);
     c.set_stats(4, 3, 2, ARMOR_SUPER);
@@ -2530,7 +2541,7 @@ void penitent(unit_card_context &c)
 }
 
 
-void zealot(unit_card_context &c)
+void zealot(tcard &c)
 {
     c.set_faction_type(FACTION_ABHORRER, UNIT_HORROR);
     c.set_stats(4, 4, 4, ARMOR_NONE);
@@ -2547,7 +2558,7 @@ void zealot(unit_card_context &c)
 }
 
 
-void antipriest(unit_card_context &c)
+void antipriest(tcard &c)
 {
     c.set_faction_type(FACTION_ABHORRER, UNIT_FREAK);
     c.set_stats(3, 4, 3, ARMOR_MAG);
@@ -2564,7 +2575,7 @@ void antipriest(unit_card_context &c)
 }
 
 
-void inquisitor(unit_card_context &c)
+void inquisitor(tcard &c)
 {
     c.set_faction_type(FACTION_ABHORRER, UNIT_HUNTER);
     c.set_stats(3, 4, 3, ARMOR_NONE);
@@ -2580,7 +2591,7 @@ void inquisitor(unit_card_context &c)
 }
 
 
-void holy_body(unit_card_context &c)
+void holy_body(tcard &c)
 {
     c.set_faction_type(FACTION_ABHORRER, UNIT_TYRANT);
     c.set_stats(3, 3, 2, ARMOR_SUPER);
@@ -2598,7 +2609,7 @@ void holy_body(unit_card_context &c)
 }
 
 
-void abbot(unit_card_context &c)
+void abbot(tcard &c)
 {
     c.set_faction_type(FACTION_ABHORRER, UNIT_FREAK);
     c.set_stats(4, 3, 3, ARMOR_PHYS);
@@ -2615,14 +2626,14 @@ void abbot(unit_card_context &c)
 }
 
 
-void exorcist(unit_card_context &c)
+void exorcist(tcard &c)
 {
     c.set_faction_type(FACTION_ABHORRER, UNIT_NECROMANCER);
     c.set_stats(4, 10, 4, ARMOR_NONE);
 }
 
 
-void stitch(unit_card_context &c)
+void stitch(tcard &c)
 {
     c.set_faction_type(FACTION_IGORRI, UNIT_THRALL);
     c.set_stats(3, 2, 4, ARMOR_NONE);
@@ -2639,7 +2650,7 @@ void stitch(unit_card_context &c)
 }
 
 
-void chop_doc(unit_card_context &c)
+void chop_doc(tcard &c)
 {
     c.set_faction_type(FACTION_IGORRI, UNIT_FREAK);
     c.set_stats(4, 4, 4, ARMOR_MAG);
@@ -2656,7 +2667,7 @@ void chop_doc(unit_card_context &c)
 }
 
 
-void lycan(unit_card_context &c)
+void lycan(tcard &c)
 {
     c.set_faction_type(FACTION_IGORRI, UNIT_HORROR);
     c.set_stats(4, 4, 4, ARMOR_NONE);
@@ -2676,7 +2687,7 @@ void lycan(unit_card_context &c)
 }
 
 
-void strigoi(unit_card_context &c)
+void strigoi(tcard &c)
 {
     c.set_faction_type(FACTION_IGORRI, UNIT_HUNTER);
     c.set_stats(3, 4, 4, ARMOR_NONE);
@@ -2692,7 +2703,7 @@ void strigoi(unit_card_context &c)
 }
 
 
-void homonculus(unit_card_context &c)
+void homonculus(tcard &c)
 {
     c.set_faction_type(FACTION_IGORRI, UNIT_TYRANT);
     c.set_stats(4, 6, 3, ARMOR_NONE);
@@ -2711,7 +2722,7 @@ void homonculus(unit_card_context &c)
 }
 
 
-void chirurgeon(unit_card_context &c)
+void chirurgeon(tcard &c)
 {
     c.set_faction_type(FACTION_IGORRI, UNIT_NECROMANCER);
     c.set_stats(4, 10, 3, ARMOR_MAG);
@@ -2739,6 +2750,69 @@ void chirurgeon(unit_card_context &c)
     c.add_upgrade_soul_ability(enum_or(TRIGGER_SOUL_FOE_TURN, TRIGGER_TURN_START), devolve);
     c.add_upgrade_soul_ability(enum_or(TRIGGER_SOUL_OWN_TURN, TRIGGER_TURN_START), final_form);
 }
+
+
+void carcass(tfaction &c)
+{
+    c.add_card(gunwight);
+    c.add_card(enforcer);
+    c.add_card(ammo_goblin);
+    c.add_card(barrelform);
+    c.add_card(egis_weapon);
+    // c.add_card(operator);
+}
+
+
+void goregrinders(tfaction &c)
+{
+    c.add_card(warhead);
+    c.add_card(carnifex);
+    c.add_card(pain_ghoul);
+    c.add_card(painwheel);
+    c.add_card(berserker);
+}
+
+
+void gargamox(tfaction &c)
+{
+    c.add_card(scum);
+    c.add_card(rotten);
+    c.add_card(leech);
+    c.add_card(host);
+    c.add_card(slime);
+}
+
+
+void deadsouls(tfaction &c)
+{
+    c.add_card(sacrifice);
+    c.add_card(chosen);
+    c.add_card(visigheist);
+    c.add_card(banshee);
+    c.add_card(bound_devil);
+}
+
+
+void abhorrer(tfaction &c)
+{
+    c.add_card(penitent);
+    c.add_card(zealot);
+    c.add_card(antipriest);
+    c.add_card(inquisitor);
+    c.add_card(holy_body);
+}
+
+
+void igorri(tfaction &c)
+{
+    c.add_card(stitch);
+    c.add_card(chop_doc);
+    c.add_card(lycan);
+    c.add_card(strigoi);
+    c.add_card(homonculus);
+    c.add_card(chirurgeon);
+}
+
 
 int main()
 {
