@@ -2,6 +2,8 @@
 #include <optional>
 #include <list>
 #include <map>
+#include <set>
+#include <algorithm>
 #include <iostream>
 
 
@@ -40,8 +42,15 @@ enum stuff
     COUNTER_PHYSICAL_ARMOR,
     COUNTER_ALTERED_MV,
     COUNTER_ALTERED_DF,
+    COUNTER_FLIGHT,
     COUNTER_IS_2X2,
 
+    // Regurgitate has a 5+ effect chance to strip a token of your choice from each foe in the area.
+    UPGRADE_DROWN_IN_VISCERA,
+    // May mutate once for each corpse created with Regurgitate instead.
+    UPGRADE_RAPID_ADAPTATION,
+    // Regurgitate has a 5+ effect chance to remove a negative token from an ally caught in the area
+    UPGRADE_CLEANSING_WASH,
     // When choosing to MOVE again, destroys walls and absorbs corpses it moves over, mutating each time
     UPGRADE_BALL_OF_LIMBS,
     // When absorbing allies, slays instead of obliterating them, and this unit mutates.
@@ -61,9 +70,6 @@ enum stuff
     SELECT_TOKEN_ONLY_NEGATIVE,
     SELECT_TOKEN_ONLY_POSITIVE,
 
-    SELECT_SPACE_ANY,
-    SELECT_SPACE_FREE,
-
     DAMAGE_TOXIN,
     DAMAGE_NORMAL,
     DAMAGE_GRAZE,
@@ -78,6 +84,7 @@ enum stuff
 
     FACTION_IGORRI,
 
+    UNIT_HUNTER,
     UNIT_TYRANT,
     UNIT_NECROMANCER,
 };
@@ -89,10 +96,18 @@ enum select_unit_filter
     SELECT_UNIT_EXCLUDE_SELF,
     SELECT_UNIT_EXCLUDE_ALLY,
     SELECT_UNIT_EXCLUDE_FOE,
+
     SELECT_UNIT_WITH_POSITIVE_TOKENS,
     SELECT_UNIT_WITH_NEGATIVE_TOKENS,
     SELECT_UNIT_WITH_MUTATION_TOKENS,
     SELECT_UNIT_WITHOUT_CURSEPROOF,
+};
+
+
+enum select_space_filter
+{
+    SELECT_SPACE_ANY,
+    SELECT_SPACE_FREE,
 };
 
 
@@ -119,6 +134,7 @@ enum movement_tags
 
 
 template <typename T> T enum_or(T a, T b) { return T((int)a | (int)b); }
+template <typename T> T enum_or(T a, T b, T c) { return enum_or(a, enum_or(b, c)); }
 
 
 struct map_pos
@@ -134,10 +150,10 @@ struct unit_context
 {
     virtual ~unit_context() = default;
     virtual list<token_context *> tokens() = 0;
+    virtual int n_tokens(int filter = SELECT_TOKEN_ANY) const = 0;
     virtual token_context *find_token(token_type type) = 0;
     virtual bool remove_token(token_context &, int count = 1) = 0;
     virtual void add_token(token_type type, int count = 1) = 0;
-    virtual void move_token(token_context *) = 0;
 
     virtual int inc_counter(int counter, int x, int def_value = 0) = 0;
     virtual void set_counter(int counter, int x) = 0;
@@ -185,17 +201,19 @@ struct unit_action_context
     virtual optional<token_type> player_may_select_token_type(const list<token_type> &token_types) = 0;
     virtual optional<token_type> player_must_select_token_type(const list<token_type> &token_types) = 0;
     virtual token_context *player_may_select_token(const list<token_context *> &tokens, int filter = SELECT_TOKEN_ANY) = 0;
+    virtual token_context *player_must_select_token(const list<token_context *> &tokens, int filter = SELECT_TOKEN_ANY) = 0;
     virtual unit_context *player_must_select_unit(const list<unit_context *> &units) = 0;
     virtual list<unit_context *> player_must_select_line(int) = 0;
-    virtual optional<map_pos> player_must_select_free_space(const map_pos &, int range, int filter = SELECT_SPACE_ANY) = 0;
+    virtual optional<map_pos> player_must_select_space(const map_pos &, int range, select_space_filter filter = SELECT_SPACE_ANY) = 0;
+    virtual optional<map_pos> player_must_select_space(const map_pos &, int min, int max, select_space_filter filter = SELECT_SPACE_ANY) = 0;
     virtual bool player_may_take_action(int) = 0;
     virtual bool player_may_spend_soul(int x) = 0;
     virtual int player_roll_d6(unit_context &who, int tags = ROLL_TAG_NONE) = 0;
     virtual int d6_gradations(int d6, const map<int, int> &treshold_to_result = {}) const = 0;
 
-    // TODO: may unit trigger something on step and die? then it should be [[no_discard]] bool unit_step
     virtual bool is_hit(unit_context &target, int d6) const = 0;
     virtual void unit_move(unit_context &, movement_tags extra_tags = MOVEMENT_DEFAULT, int *walls_destroyed = nullptr, int *corpses_absorved = nullptr) = 0;
+    // TODO: may unit trigger something on step and die? then it should be [[no_discard]] bool unit_step
     virtual void unit_step(unit_context &, int range = 1, movement_tags tags = MOVEMENT_DEFAULT) = 0;
     virtual void obliterate(unit_context &) = 0;
     virtual int inc_corpse(const map_pos &, int x = 0) = 0;
@@ -238,6 +256,13 @@ struct unit_card_context
 };
 
 
+// Ignores adverse terrain and elevation attack and movement penalties
+void flight(unit_action_context &c)
+{
+    c.self().set_counter(COUNTER_FLIGHT, 1);
+}
+
+
 // Starts combat with 4 mutation tokens
 void warpflesh(unit_action_context &c)
 {
@@ -249,6 +274,124 @@ void warpflesh(unit_action_context &c)
 void tyrant(unit_action_context &c)
 {
     c.self().set_counter(COUNTER_IS_2X2, 1);
+}
+
+
+void regurgitate_drown_in_viscera(unit_action_context &c, unit_context *target)
+{
+    if (c.player_roll_d6(c.self()) < 5)
+        return;
+
+    list<unit_context *> us = target->units_in_range(1, 1, enum_or(SELECT_UNIT_EXCLUDE_ALLY, SELECT_UNIT_WITH_NEGATIVE_TOKENS));
+    if (us.empty())
+        return;
+
+    set<token_type> ts;
+    for (unit_context *u : us) {
+        for (token_context *t : u->tokens())
+            ts.insert(t->type());
+    }
+
+    list<token_type> ts_list(ts.begin(), ts.end());
+    ts_list.sort();
+
+    optional<token_type> tt = c.player_may_select_token_type(ts_list);
+    if (!tt)
+        return;
+
+    for (unit_context *u : us) {
+        token_context *t = u->find_token(*tt);
+        if (t)
+            u->remove_token(*t, 1);
+    }
+}
+
+
+void regurgitate_cleansing_wash(unit_action_context &c, unit_context *target)
+{
+    if (c.player_roll_d6(c.self()) < 5)
+        return;
+
+    list<unit_context *> us = target->units_in_range(1, 1, enum_or(SELECT_UNIT_EXCLUDE_FOE, SELECT_UNIT_WITH_NEGATIVE_TOKENS));
+    if (us.empty())
+        return;
+
+    unit_context *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    token_context *t = c.player_must_select_token(u->tokens(), SELECT_TOKEN_ONLY_NEGATIVE);
+    if (!t)
+        return;
+
+    u->remove_token(*t);
+}
+
+
+// Range 2-4 Effect: Splash (target): Create a corpse in the area for every unit in the area, up to three times, then mutate.
+void regurgitate(unit_action_context &c)
+{
+    list<unit_context *> us = c.self().units_in_range(2, 4);
+    if (us.empty())
+        return c.no_target();
+
+    unit_context *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    list<unit_context *> splash = u->units_in_range(1, SELECT_UNIT_EXCLUDE_SELF);
+    int corpses = min(3, (int)splash.size());
+    int mutations = c.self().has_upgrade(UPGRADE_RAPID_ADAPTATION) ? corpses : 1;
+
+    while (corpses--) {
+        optional<map_pos> p = c.player_must_select_space(u->pos(), 1, 1);
+        if (!p)
+            return;
+        c.inc_corpse(*p, +1);
+    }
+
+    if (c.self().has_upgrade(UPGRADE_DROWN_IN_VISCERA))
+        regurgitate_drown_in_viscera(c, u);
+
+    if (c.self().has_upgrade(UPGRADE_CLEANSING_WASH))
+        regurgitate_cleansing_wash(c, u);
+
+    if (!c.then())
+        return;
+    while (mutations--)
+        c.mutate(c.self());
+}
+
+
+// Range 2-4, Attack On hit: 1 damage. Effect: Steal a positive token from target. Spare Parts: plus one more token per corpse consumed. If target has no positive tokens, gain 1 strength instead of stealing a token
+void sin_eater(unit_action_context &c)
+{
+    list<unit_context *> us = c.self().units_in_range(2, 4);
+    if (us.empty())
+        return c.no_target();
+
+    unit_context *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    if (!c.is_hit(*u, c.player_roll_d6(c.self(), ROLL_TAG_ATTACK)))
+        return u->take_damage(1, DAMAGE_GRAZE);
+
+    u->take_damage(1, DAMAGE_NORMAL);
+
+    if (u->n_tokens(SELECT_TOKEN_ONLY_POSITIVE)) {
+        c.self().add_token(TOKEN_STRENGTH);
+        return;
+    }
+
+    int times = 1 + c.player_may_spare_parts(c.self());
+    while (times--) {
+        token_context *t = c.player_may_select_token(u->tokens());
+        if (!t)
+            return;
+        u->remove_token(*t, 1);
+        c.self().add_token(t->type(), 1);
+    }
 }
 
 
@@ -314,13 +457,15 @@ void flesh_whip(unit_action_context &c)
     if (!c.is_hit(*u, d6))
         return u->take_damage(1, DAMAGE_GRAZE);
 
-    u->take_damage(1, DAMAGE_NORMAL);
+    // self + splash
+    for (unit_context *near : u->units_in_range(1))
+        u->take_damage(1, DAMAGE_NORMAL);
 
     int n = c.d6_gradations(d6, {{1, 0}, {4, 1}, {6, 2}});
     if (!n)
         return;
 
-    optional<map_pos> p = c.player_must_select_free_space(u->pos(), 1);
+    optional<map_pos> p = c.player_must_select_space(u->pos(), 1);
     if (!p)
         return;
 
@@ -377,8 +522,8 @@ void accelerate_evolution(unit_action_context &c)
     if (!u)
         return;
 
-    c.self().remove_token(*t);
-    u->move_token(t);
+    c.self().remove_token(*t, 1);
+    u->add_token(t->type(), 1);
 }
 
 
@@ -449,7 +594,7 @@ void new_material(unit_action_context &c)
     int cs = c.d6_gradations(d6, {{1, 1}, {3, 2}, {5, 3}});
     int n = 0;
     while (cs--) {
-        optional<map_pos> p = c.player_must_select_free_space(c.self().pos(), 1, SELECT_SPACE_FREE);
+        optional<map_pos> p = c.player_must_select_space(c.self().pos(), 1, SELECT_SPACE_FREE);
         if (p) {
             c.inc_corpse(*p, +1);
             ++n;
@@ -474,7 +619,7 @@ void clone(unit_action_context &c)
     unit_context *u = c.player_must_select_unit(us);
     if (!u)
         return;
-    optional<map_pos> p = c.player_must_select_free_space(c.self().pos(), 2, SELECT_SPACE_FREE);
+    optional<map_pos> p = c.player_must_select_space(c.self().pos(), 2, SELECT_SPACE_FREE);
     if (!p)
         return c.no_target();
     c.copy_unit(*u, *p);
@@ -792,7 +937,7 @@ void recycle(unit_action_context &c)
     if (!dead)
         return;
     c.obliterate(u);
-    optional<map_pos> p = c.player_must_select_free_space(u.pos(), 1, SELECT_SPACE_FREE);
+    optional<map_pos> p = c.player_must_select_space(u.pos(), 1, SELECT_SPACE_FREE);
     if (!p)
         return;
     optional<int> n = c.player_must_select_corpse_count(3);
@@ -837,6 +982,22 @@ void final_form(unit_action_context &c)
     c.self().add_token(TOKEN_STRENGTH, 6);
 
     c.self().set_counter(COUNTER_FINAL_FORM, 2);
+}
+
+
+void strigoi(unit_card_context &c)
+{
+    c.set_faction_type(FACTION_IGORRI, UNIT_HUNTER);
+    c.set_stats(3, 4, 4, ARMOR_NONE);
+
+    c.add_trait(TRIGGER_COMBAT_START, flight);
+
+    c.add_act_ability(regurgitate);
+    c.add_act_ability(sin_eater);
+
+    c.add_upgrade(UPGRADE_DROWN_IN_VISCERA);
+    c.add_upgrade(UPGRADE_RAPID_ADAPTATION);
+    c.add_upgrade(UPGRADE_CLEANSING_WASH);
 }
 
 
