@@ -15,9 +15,11 @@ enum stuff
     TRIGGER_ACTION_MANUAL,
     TRIGGER_TURN_START,
     TRIGGER_TURN_END,
-    TRIGGER_BEFORE_ATTACK,
     TRIGGER_BEFORE_MOVE,
     TRIGGER_AFTER_MOVE,
+    TRIGGER_BEFORE_ACT,
+    TRIGGER_AFTER_ACT,
+    TRIGGER_BEFORE_ATTACK,
     TRIGGER_SLAINED,
     TRIGGER_DAMAGED,
 
@@ -28,6 +30,7 @@ enum stuff
     TRIGGER_SOUL_ANY_TURN = TRIGGER_SOUL_OWN_TURN | TRIGGER_SOUL_ALLIED_TURN | TRIGGER_SOUL_FOE_TURN,
 
     // ask a player, will it do it when it may?
+    TAKE_ACTION_SCAVENGE_AMMO,
     TAKE_ACTION_RAPID_MOVE,
     TAKE_ACTION_ANCILLARY_LIMBS,
     TAKE_ACTION_AUTOPHAGIA,
@@ -36,8 +39,8 @@ enum stuff
 
     // what bonus types can be applied to a roll?
     ROLL_TAG_NONE,
-    ROLL_TAG_CURSE,
     ROLL_TAG_ATTACK,
+    ROLL_TAG_IGNORE_COVER,
 
     // which tokens to select?
     SELECT_TOKEN_ANY,
@@ -77,17 +80,11 @@ enum stuff
     UNIT_TYRANT,
     UNIT_NECROMANCER,
 
-    // unit allowed to make a step on start/end of it's turn
-    COUNTER_RAPID_MOVE_AVAILABLE,
-    // +1D on any attack and ignore cover. removed after attack
-    COUNTER_ANCILLARY_LIMBS,
-    // at the end of it's turn explode(self) effect for 1 toxin damage. allies (of one, who set this effect) mutate instead of taking damage
-    COUNTER_BIOTOXIN_INJECTOR,
-    // +1D to attacks per stack, and damage ignores armor. til turn end
-    COUNTER_GROW_BONUS_LIMBS,
-    // tick down at the of your turn, obliterated when reaches zero
     COUNTER_FINAL_FORM,
-    COUNTER_CURSEPROOF,
+    COUNTER_UNABLE_TO_MOVE,
+    COUNTER_UNABLE_TO_STEP,
+    COUNTER_IMMUNE_TO_PUSH,
+    COUNTER_IMMUNE_TO_PULL,
     COUNTER_MOVEMENT_FREE,
     COUNTER_MOVEMENT_DESTROY_WALLS,
     COUNTER_MOVEMENT_ABSORB_CORPSES,
@@ -101,6 +98,14 @@ enum stuff
     COUNTER_IS_2X2,
     COUNTER_COST_HALF_UNIT_SLOT,
     COUNTER_ACTIVATED_TWO_AT_A_TIME,
+
+    COUNTER_FORMATION,
+    COUNTER_RELOAD,
+    COUNTER_RELOAD_2,
+    COUNTER_SCAVENGE_AMMO_AVAILABLE,
+    COUNTER_BONE_SHARDS,
+    COUNTER_TRANSFORM_TO_GUN,
+
     COUNTER_MIRACLE,
     COUNTER_DELAY_JUDGEMENT,
     COUNTER_SMITE,
@@ -108,6 +113,17 @@ enum stuff
     COUNTER_ABLUTIONS,
     COUNTER_BLOOD_OF_THE_COVENANT,
     COUNTER_CANT_GET_VITALITY,
+
+    // unit allowed to make a step on start/end of it's turn
+    COUNTER_RAPID_MOVE_AVAILABLE,
+    // +1D on any attack and ignore cover. removed after attack
+    COUNTER_ANCILLARY_LIMBS,
+    // at the end of it's turn explode(self) effect for 1 toxin damage. allies (of one, who set this effect) mutate instead of taking damage
+    COUNTER_BIOTOXIN_INJECTOR,
+    // +1D to attacks per stack, and damage ignores armor. til turn end
+    COUNTER_GROW_BONUS_LIMBS,
+    // tick down at the of your turn, obliterated when reaches zero
+    COUNTER_CURSEPROOF,
 };
 
 
@@ -125,7 +141,11 @@ enum select_unit_filter
     SELECT_UNIT_WITH_VITALITY_TOKENS,
     SELECT_UNIT_WITHOUT_CURSEPROOF,
 
+    // +1 max range if unit has cover against a target
+    SELECT_UNIT_MODIFY_BRACE,
     SELECT_UNIT_IGNORE_LINE_OF_SIGHT,
+    // if selects more than 1 unit, all of them must be adjacent to each other
+    SELECT_UNIT_ADJACENT_TARGETS,
 };
 
 
@@ -134,6 +154,7 @@ enum select_space_filter
     SELECT_SPACE_EXCLUDE_NONE,
     SELECT_SPACE_EXCLUDE_OCCUPIED,
     SELECT_SPACE_EXCLUDE_WALLS,
+    SELECT_SPACE_EXCLUDE_CORPSELESS,
 };
 
 
@@ -417,6 +438,9 @@ struct tunit
     virtual bool is_slain() const = 0;
     virtual int n_moves() const = 0;
     virtual int n_acts() const = 0;
+    virtual int inc_moves(int inc) = 0;
+    virtual bool has_cover(tunit &from) const = 0;
+    virtual bool is_in_formation() const = 0;
 
     virtual int size() const { return counter(COUNTER_IS_2X2) ? 2 : 1; }
     virtual bool is_curseproof() const { return counter(COUNTER_CURSEPROOF) > 0; }
@@ -459,14 +483,15 @@ struct taction
     virtual tunit *player_may_select_unit(const list<tunit *> &units, const list<tunit *> &exclude = {}) = 0;
     virtual tunit *player_must_select_unit(const list<tunit *> &units, const list<tunit *> &exclude = {}) = 0;
     virtual list<tunit *> player_must_select_units(const list<tunit *> &units, int min, int max) = 0;
-    virtual list<tunit *> player_must_select_line(int) = 0;
+    virtual list<tunit *> player_must_select_line(int, list<map_pos> *poses = nullptr) = 0;
     virtual optional<map_pos> player_must_select_space(const map_pos &, int range, select_space_filter filter = SELECT_SPACE_EXCLUDE_NONE) = 0;
     virtual optional<map_pos> player_must_select_space(const map_pos &, int min, int max, select_space_filter filter = SELECT_SPACE_EXCLUDE_NONE) = 0;
     virtual list<map_pos> player_must_select_spaces(const map_pos &, int up_to, int min, int max, select_space_filter filter = SELECT_SPACE_EXCLUDE_NONE) = 0;
     virtual bool player_may_take_action(int) = 0;
     virtual bool player_may_spend_soul(int x) = 0;
-    virtual int player_roll_d6(tunit &who, int tags = ROLL_TAG_NONE) = 0;
+    virtual int player_roll_d6(tunit &who, int tags = ROLL_TAG_NONE, int extra_mod = +0) = 0;
     virtual int d6_gradations(int d6, const map<int, int> &treshold_to_result = {}) const = 0;
+    virtual bool is_headshot(int d6) const = 0;
 
     virtual bool is_hit(tunit &target, int d6) const = 0;
     virtual void unit_move(tunit &, movement_tags extra_tags = MOVEMENT_DEFAULT) = 0;
@@ -480,6 +505,8 @@ struct taction
     virtual bool is_wall(const map_pos &) const = 0;
     virtual void destroy_wall(const map_pos &) = 0;
     virtual void set_hazard(const map_pos &) = 0;
+
+    virtual void reload(tunit &t) const { t.set_counter(COUNTER_RELOAD, 0); }
 
     virtual int round() const = 0;
     virtual bool round(int x) const { return round() >= x; }
@@ -528,18 +555,22 @@ struct tfaction
 // While adjacent to an ally, gain +1D on attacks.
 void formation(taction &c)
 {
+    c.self().set_counter(COUNTER_FORMATION, 1);
 }
 
 
 // Once used, a unit cannot use any ability with this tag until it reloads. To reload, sacrifice a MOVE. Other abilities may allow a reload for free.
-void reload(taction &c)
+void reload(taction &c, int counter = COUNTER_RELOAD)
 {
-}
+    int moves_left = c.self().inc_moves(0);
+    if (!moves_left)
+        return c.no_resources();
 
+    if (!c.self().counter(COUNTER_RELOAD))
+        return c.no_target();
 
-// Effect that triggers when rolling a 6 on the final attack roll.
-void headshot(taction &c)
-{
+    c.self().inc_moves(-1);
+    c.reload(c.self());
 }
 
 
@@ -555,15 +586,89 @@ void active_camo(taction &c)
 }
 
 
+// May consume one adjacent corpse before or after ACTing to reload and gain 1 strength.
+void scavenge_ammo(taction &c)
+{
+    if (!c.self().has_upgrade(UPGRADE_SCAVENGE_AMMO))
+        return;
+
+    if (c.trigger() == TRIGGER_BEFORE_ACT)
+        c.self().set_counter(COUNTER_SCAVENGE_AMMO_AVAILABLE, 1);
+    bool use = c.self().counter(COUNTER_SCAVENGE_AMMO_AVAILABLE);
+    if (c.trigger() == TRIGGER_AFTER_ACT)
+        c.self().set_counter(COUNTER_SCAVENGE_AMMO_AVAILABLE, 0);
+
+    if (!use)
+        return c.no_resources();
+
+    if (!c.self().corpses_in_range(1, 1))
+        return c.no_target();
+
+    optional<map_pos> p = c.player_must_select_space(c.self().pos(), 1, SELECT_SPACE_EXCLUDE_CORPSELESS);
+    if (!p)
+        return;
+
+    c.inc_corpse(*p, -1);
+    c.reload(c.self());
+    c.self().gain_token(TOKEN_STRENGTH);
+    c.self().set_counter(COUNTER_SCAVENGE_AMMO_AVAILABLE, 0);
+}
+
+
 // Attack, Range 2-3, reload. On hit: 1 piercing damage. Headshot: inflict 1 vulnerable.
 void ol45(taction &c)
 {
+    if (c.self().counter(COUNTER_RELOAD))
+        return reload(c);
+
+    bool brace = c.self().has_upgrade(UPGRADE_BRACE);
+    select_unit_filter f = brace ? SELECT_UNIT_MODIFY_BRACE : SELECT_UNIT_EXCLUDE_NONE;
+    list<tunit *> us = c.self().units_in_range(2, 3, f);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    int d6 = c.player_roll_d6(c.self(), ROLL_TAG_ATTACK);
+    if (!c.is_hit(*u, d6)) {
+        u->take_damage(1, DAMAGE_GRAZE, &c.self());
+        c.self().set_counter(COUNTER_RELOAD, 1);
+        return;
+    }
+    u->take_damage(1, DAMAGE_PIERCING, &c.self());
+    if (c.is_headshot(d6))
+        u->gain_token(TOKEN_VULNERABLE);
+    if (brace)
+        u->push(c.self(), 1);
+    c.self().set_counter(COUNTER_RELOAD, 1);
+
+    if (c.self().has_upgrade(UPGRADE_TACTICAL_RELOAD) && c.is_headshot(d6)) {
+        c.reload(c.self());
+        c.self().gain_token(TOKEN_STRENGTH);
+    }
 }
 
 
 // Push, melee. Effect: Push 1 and (3+) inflict 1 vulnerable.
 void baton(taction &c)
 {
+    list<tunit *> us = c.self().units_in_range(2, 3);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    int d6 = c.player_roll_d6(c.self());
+    if (!c.is_hit(*u, d6))
+        return;
+
+    u->push(c.self(), 1);
+    if (d6 >= 3)
+        u->gain_token(TOKEN_VULNERABLE);
 }
 
 
@@ -576,6 +681,8 @@ void skull_crack(taction &c)
 // Range 2-3, reload, splash. Effect: 1 fire damage and 1 vulnerable, then Splash (target): push 1 away from target.
 void flashbang(taction &c)
 {
+    if (c.self().counter(COUNTER_RELOAD))
+        return reload(c);
 }
 
 
@@ -585,57 +692,255 @@ void shieldwall(taction &c)
 }
 
 
-// Range 1-2. Effect: A unit in range reloads and gains one, (6+) or two strength.
+// Range 3. Effect: A unit in range reloads and gains one, (6+) or two strength.
 void regurgitate_ammo(taction &c)
 {
+    if (c.self().has_upgrade(UPGRADE_HOT_CHAMBER)) {
+        list<tunit *> us = c.self().units_in_range(3, SELECT_UNIT_ADJACENT_TARGETS);
+        if (us.empty())
+            return c.no_target();
+
+        us = c.player_must_select_units(us, 1, 2);
+        for (tunit *u : us)
+            c.reload(*u);
+        return;
+    }
+
+    list<tunit *> us = c.self().units_in_range(3);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    int d6 = c.player_roll_d6(c.self());
+    int x = c.d6_gradations(d6, {{0, 1}, {6, 2}});
+
+    c.reload(*u);
+    u->gain_token(TOKEN_STRENGTH, x);
 }
 
 
 // Curse, Range 1-3. Effect: Unit takes 1 damage after any ACT ability resolves that pushes or pulls them. Lasts until end of this unit's next turn or until this unit has taken 3 damage this way.
 void bone_shards(taction &c)
 {
+    list<tunit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_WITHOUT_CURSEPROOF);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    u->set_counter(COUNTER_BONE_SHARDS, 3);
+
+    if (c.self().has_upgrade(UPGRADE_VOMIT_BULLETS)) {
+        int d6 = c.player_roll_d6(c.self());
+        int n = c.d6_gradations(d6, {{0, 0}, {4, 1}, {6, 1}});
+        while (n--)
+            u->push(c.self(), 1);
+    }
 }
 
 
 // Self. Effect: Step 1, then Splash (self): 1 fire damage, push 1, and inflict vulnerable, then self is obliterated.
 void destructive_glee(taction &c)
 {
+    int d6 = 1;
+    if (c.self().has_upgrade(UPGRADE_NAPALM_INJECTOR))
+        d6 = c.player_roll_d6(c.self());
+
+    c.unit_step(c.self(), 1);
+    for (tunit *u : c.self().units_in_range(1, 1)) {
+        int dmg = d6 >= 4 ? 2 : 1;
+        u->take_damage(dmg, DAMAGE_FIRE, &c.self());
+        u->push(c.self(), 1);
+        int x = d6 >= 6 ? 2 : 1;
+        u->gain_token(TOKEN_VULNERABLE, +x);
+    }
+    c.obliterate(c.self());
 }
 
 
 // Attack, Range 2-4, reload. On hit: 2 damage. Headshot: and inflict 1 vulnerable.
 void snipe(taction &c)
 {
+    if (c.self().counter(COUNTER_RELOAD))
+        return reload(c);
+
+    bool gun = c.self().counter(COUNTER_TRANSFORM_TO_GUN);
+    int max_range = gun ? 6 : 4;
+    list<tunit *> us = c.self().units_in_range(2, max_range);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    int mod = 0;
+    if (c.self().has_upgrade(UPGRADE_EXTENDED_BARREL))
+        mod = c.self().has_cover(*u) ? +1 : -1;
+
+    int tags = gun ? enum_or(ROLL_TAG_ATTACK, ROLL_TAG_IGNORE_COVER) : ROLL_TAG_ATTACK;
+    int d6 = c.player_roll_d6(c.self(), tags, mod);
+    if (!c.is_hit(*u, d6)) {
+        u->take_damage(1, DAMAGE_GRAZE, &c.self());
+        c.self().set_counter(COUNTER_RELOAD, 1);
+        return;
+    }
+
+    int type = gun ? DAMAGE_PIERCING : DAMAGE_NORMAL;
+    u->take_damage(2, type, &c.self());
+    if (c.is_headshot(d6))
+        u->gain_token(TOKEN_VULNERABLE);
+    if (c.self().has_upgrade(UPGRADE_CALIBER_UP)) {
+        int x = c.is_headshot(d6) ? 2 : 1;
+        u->push(c.self(), x);
+    }
+    c.self().set_counter(COUNTER_RELOAD, 1);
 }
 
 
 // Self. Effect: Unit becomes unable to MOVE or step, but ranged abilities gain +2 maximum range and ignore armor and cover. It can end this effect by sacrificing a MOVE, but if it does, it loses all associated effects.
 void transform_to_gun(taction &c)
 {
+    if (c.self().counter(COUNTER_TRANSFORM_TO_GUN)) {
+        int moves_left = c.self().inc_moves(0);
+        if (!moves_left)
+            return c.no_resources();
+
+        c.self().inc_moves(-1);
+        c.self().set_counter(COUNTER_TRANSFORM_TO_GUN, 0);
+        c.self().inc_counter(COUNTER_UNABLE_TO_MOVE, -1);
+        c.self().inc_counter(COUNTER_UNABLE_TO_STEP, -1);
+
+        if (c.self().has_upgrade(UPGRADE_CLAW_PITONS)) {
+            c.self().inc_counter(COUNTER_IMMUNE_TO_PUSH, -1);
+            c.self().inc_counter(COUNTER_IMMUNE_TO_PULL, -1);
+        }
+        return;
+    }
+
+    c.self().set_counter(COUNTER_TRANSFORM_TO_GUN, 1);
+    c.self().inc_counter(COUNTER_UNABLE_TO_MOVE, +1);
+    c.self().inc_counter(COUNTER_UNABLE_TO_STEP, +1);
+
+    if (c.self().has_upgrade(UPGRADE_CLAW_PITONS)) {
+        c.self().inc_counter(COUNTER_IMMUNE_TO_PUSH, +1);
+        c.self().inc_counter(COUNTER_IMMUNE_TO_PULL, +1);
+    }
 }
 
 
 // Curse, Range 2-4. Effect: Inflict 2 vulnerable, (4+): 3 vulnerable, (6+): Remove any vitality first.
 void deathmark(taction &c)
 {
+    bool gun = c.self().counter(COUNTER_TRANSFORM_TO_GUN);
+    int max_range = gun ? 6 : 4;
+    list<tunit *> us = c.self().units_in_range(2, max_range, SELECT_UNIT_WITHOUT_CURSEPROOF);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    int tags = gun ? ROLL_TAG_IGNORE_COVER : ROLL_TAG_NONE;
+    int d6 = c.player_roll_d6(c.self(), tags);
+    int x = d6 >= 4 ? 3 : 2;
+    ttoken *t = u->find_token(TOKEN_VITALITY);
+    if (d6 >= 6 && t)
+        u->remove_token(t->type(), t->count());
+
+    u->gain_token(TOKEN_VULNERABLE, x);
 }
 
 
 // Self, push. Effect: Step 1, then splash (self) push foes 1, (4+) push foes 2. May move into and destroy walls with this step.
 void juggernaut(taction &c)
 {
+    if (c.self().has_upgrade(UPGRADE_FORTIFY)) {
+        for (ttoken *t : c.self().tokens()) {
+            if (t->is_negative())
+                c.self().remove_token(t->type(), t->count());
+        }
+    }
+
+    c.unit_step(c.self(), MOVEMENT_DESTROY_WALLS);
+
+    list<tunit *> us = c.self().units_in_range(1, 1, SELECT_UNIT_EXCLUDE_ALLY);
+    if (us.empty())
+        return;
+
+    int d6 = c.player_roll_d6(c.self());
+    int push = c.d6_gradations(d6, {{0, 1}, {5, 2}});
+    for (tunit *u : us)
+        u->push(c.self(), push);
 }
 
 
 // Attack, Range 3-4, reload, charge. On hit: 1 damage then Splash: 1 fire damage. Headshot: +1 damage on main target.
 void mortar(taction &c)
 {
+    if (c.self().counter(COUNTER_RELOAD))
+        return reload(c);
+
+    list<tunit *> us = c.self().units_in_range(3, 4);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    bool gunner = c.self().has_upgrade(UPGRADE_GUNNER_PIVOT) && c.self().is_in_formation();
+    int tags = gunner ? enum_or(ROLL_TAG_ATTACK, ROLL_TAG_IGNORE_COVER) : ROLL_TAG_ATTACK;
+    int d6 = c.player_roll_d6(c.self(), tags);
+    if (!c.is_hit(*u, d6)) {
+        u->take_damage(1, DAMAGE_GRAZE, &c.self());
+        c.self().set_counter(COUNTER_RELOAD, 1);
+        return;
+    }
+
+    int dmg = c.is_headshot(d6) ? 2 : 1;
+    u->take_damage(1, DAMAGE_NORMAL, &c.self());
+
+    list<tunit *> splash = u->units_in_range(1, 1);
+    for (tunit *u : splash)
+        u->take_damage(1, DAMAGE_FIRE, &c.self());
+
+    c.self().set_counter(COUNTER_RELOAD, 1);
 }
 
 
 // Line, reload. Effect: Line 5, 1 fire damage, and inflicts 1 vulnerable on the first unit in the line. Pierces through walls and can target through walls.
 void catechism_devil_cannon(taction &c)
 {
+    if (c.self().counter(COUNTER_RELOAD_2))
+        return reload(c);
+
+    list<map_pos> line;
+    list<tunit *> us = c.player_must_select_line(5, &line);
+
+    bool heavy = c.self().has_upgrade(UPGRADE_HEAVY_CALIBER_CANNON);
+    if (heavy) {
+        for (const map_pos &p : line)
+            c.destroy_wall(p);
+    }
+
+    bool first = true;
+    for (tunit *u : us) {
+        u->take_damage(1, DAMAGE_FIRE, &c.self());
+        if (heavy)
+            u->push(c.self(), 1);
+        if (first) {
+            first = false;
+            u->gain_token(TOKEN_VULNERABLE);
+        }
+    }
+    c.self().set_counter(COUNTER_RELOAD_2, 1);
 }
 
 
@@ -2007,7 +2312,7 @@ void accelerate_evolution(taction &c)
 // May remove a mutation token at start or end of own turn to step 2.
 void rapid_move(taction &c)
 {
-    if (c.trigger() & TRIGGER_TURN_START) {
+    if (c.trigger() == TRIGGER_TURN_START) {
         c.self().inc_counter(COUNTER_RAPID_MOVE_AVAILABLE, +1);
         ttoken *t = c.self().find_token(TOKEN_MUTATION);
         if (!t)
@@ -2021,7 +2326,7 @@ void rapid_move(taction &c)
         return;
     }
 
-    if (c.trigger() & TRIGGER_TURN_END) {
+    if (c.trigger() == TRIGGER_TURN_END) {
         bool rm_available = c.self().counter(COUNTER_RAPID_MOVE_AVAILABLE);
         ttoken *t = c.self().find_token(TOKEN_MUTATION);
         if (!rm_available || !t)
@@ -2434,7 +2739,7 @@ void devolve(taction &c)
     if (!c.player_may_spend_soul(4))
         return c.no_resources();
 
-    int d6 = c.player_roll_d6(c.self(), ROLL_TAG_CURSE);
+    int d6 = c.player_roll_d6(c.self());
     int times = c.d6_gradations(d6, {{1, 1}, {5, 2}});
     while (times--) {
         u.gain_token(TOKEN_SLOW);
@@ -2469,6 +2774,7 @@ void gunwight(tcard &c)
 
     c.add_trait(TRIGGER_COMBAT_START, formation);
     c.add_trait(TRIGGER_COMBAT_START, thrall);
+    c.add_trait(enum_or(TRIGGER_BEFORE_ACT, TRIGGER_AFTER_ACT), scavenge_ammo);
 
     c.add_act_ability(ol45);
     c.add_act_ability(baton);
