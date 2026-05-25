@@ -13,6 +13,7 @@ enum stuff
 {
     TRIGGER_COMBAT_START,
     TRIGGER_ACTION_MANUAL,
+    TRIGGER_ROUND_START, // round is when every unit takes a turn
     TRIGGER_TURN_START,
     TRIGGER_TURN_END,
     TRIGGER_BEFORE_MOVE,
@@ -21,7 +22,8 @@ enum stuff
     TRIGGER_AFTER_ACT,
     TRIGGER_BEFORE_ATTACK,
     TRIGGER_SLAINED,
-    TRIGGER_DAMAGED,
+    TRIGGER_AFTER_DAMAGED,
+    TRIGGER_AFTER_HP_CHANGED,
 
     TRIGGER_SOUL_OWN_TURN,
     TRIGGER_SOUL_ALLIED_TURN,
@@ -48,14 +50,16 @@ enum stuff
     SELECT_TOKEN_ONLY_POSITIVE,
 
     // can it be negated by armor?
-    DAMAGE_TOXIN,
     DAMAGE_NORMAL,
+    DAMAGE_TOXIN,
     DAMAGE_GRAZE,
     DAMAGE_FIRE,
     DAMAGE_HOLY,
     DAMAGE_CURSE,
     DAMAGE_DEVIL,
     DAMAGE_PIERCING,
+    DAMAGE_CANT_BE_INCREASED,
+    DAMAGE_CANT_SLAY,
 
     // what dmg types can be decreased?
     ARMOR_NONE,
@@ -105,6 +109,14 @@ enum stuff
     COUNTER_SCAVENGE_AMMO_AVAILABLE,
     COUNTER_BONE_SHARDS,
     COUNTER_TRANSFORM_TO_GUN,
+
+    COUNTER_BLOOD_RAGE,
+    // After any ability resolves that damages this unit, this unit deals 1 damage back to the ability's owner, even if this unit was slain.
+    COUNTER_RETALIATION,
+    COUNTER_STEAMING_RAGE,
+    COUNTER_RETALIATION_DECREASE_ON_TURN_START,
+    COUNTER_RETALIATION_DECREASE_ON_TURN_END,
+    COUNTER_MACHINEHEART,
 
     COUNTER_MIRACLE,
     COUNTER_DELAY_JUDGEMENT,
@@ -167,6 +179,7 @@ enum token_type
     TOKEN_SLOW,
     TOKEN_VITALITY,
     TOKEN_VULNERABLE,
+    TOKEN_BERSERK,
 };
 
 
@@ -431,13 +444,14 @@ struct tunit
     virtual list<map_pos> spaces_in_range(int, int, select_space_filter = SELECT_SPACE_EXCLUDE_NONE) const = 0;
     virtual bool is_ally(tunit &) const = 0;
     virtual void take_damage(int x, int type, tunit *from, bool *slayed = nullptr) = 0;
-    virtual void revive(int hp = 1) = 0;
     virtual map_pos pos() const = 0;
     virtual bool has_upgrade(upgrade) const = 0;
     virtual int unit_type() const = 0;
     virtual bool is_slain() const = 0;
     virtual int n_moves() const = 0;
     virtual int n_acts() const = 0;
+    virtual int hp() const = 0;
+    virtual void set_hp(int hp = 1) = 0;
     virtual int inc_moves(int inc) = 0;
     virtual bool has_cover(tunit &from) const = 0;
     virtual bool is_in_formation() const = 0;
@@ -471,6 +485,10 @@ struct taction
     virtual void no_target() = 0;
     // prevent action, because no resources
     virtual void no_resources() = 0;
+
+    #ifndef NDEBUG
+    virtual void unimplemented() = 0;
+    #endif
 
     virtual optional<int> player_must_select_roll(const list<int> &dice_rolls) = 0;
     virtual optional<int> player_must_select_token_count(int up_to_x) = 0;
@@ -577,12 +595,14 @@ void reload(taction &c, int counter = COUNTER_RELOAD)
 // May be used as a cover object by allies.
 void siege_shield(taction &c)
 {
+    return c.unimplemented();
 }
 
 
 // If this unit ends its turn with no foes adjacent, this unit becomes curseproof and all attacks against it gain -1D. Both effects last until the start of its next turn.
 void active_camo(taction &c)
 {
+    return c.unimplemented();
 }
 
 
@@ -675,6 +695,7 @@ void baton(taction &c)
 // Attack, melee, push. On hit: 2 damage and push 1. Headshot: push 2.
 void skull_crack(taction &c)
 {
+    return c.unimplemented();
 }
 
 
@@ -689,6 +710,7 @@ void flashbang(taction &c)
 // Self. Effect: Until start of this unit's next turn, this unit cannot MOVE, step, or be pushed or pulled, gains cover, and grants cover to adjacent allies from all directions.
 void shieldwall(taction &c)
 {
+    return c.unimplemented();
 }
 
 
@@ -947,18 +969,21 @@ void catechism_devil_cannon(taction &c)
 // Line 4, reload. Effect: First unit in the line takes 1 piercing damage. If catching an allied unit in the line, also inflict 2 vulnerable.
 void cross_fire(taction &c)
 {
+    return c.unimplemented();
 }
 
 
 // Step. Effect: Step 1, then push an adjacent foe 1 or (5+) 2 spaces. That foe must spend a MOVE before next attacking.
 void slide_kick(taction &c)
 {
+    return c.unimplemented();
 }
 
 
 // Self. Effect: Reload and gain 1 strength (4+) then regain this unit’s ACT. This ability can’t be used again this turn.
 void trick_reload(taction &c)
 {
+    return c.unimplemented();
 }
 
 
@@ -986,368 +1011,637 @@ void large(taction &c)
 // If a unit with this trait is reduced to 0 HP, they are not slain, but instead gain 1 strength and remain at 0 HP, no matter how much damage they took. If they take any further damage at 0 HP, they are slain as normal.
 void blood_rage(taction &c)
 {
+    // already activated
+    if (c.self().counter(COUNTER_BLOOD_RAGE))
+        return;
+
+    if (c.self().hp() > 0)
+        return;
+
+    c.self().set_counter(COUNTER_BLOOD_RAGE, 1);
+    c.self().set_hp(0);
+    c.self().gain_token(TOKEN_STRENGTH);
 }
 
 
 // After a berserk unit ACTs, it splashes (self) 1 damage, then discards a berserk token. This damage can't be increased in any way. If this effect does not damage any other characters, it deals 1 damage to itself instead, ignoring armor. Berserk counts as a positive and a negative token.
 void berserk(taction &c)
 {
-}
+    ttoken *t = c.self().find_token(TOKEN_BERSERK);
+    if (!t)
+        return;
 
-
-// After any ability resolves that damages this unit, this unit deals 1 damage back to the ability's owner, even if this unit was slain.
-void retaliation(taction &c)
-{
+    c.self().remove_token(t->type(), 1);
+    list<tunit *> splash = c.self().units_in_range(1, 1);
+    if (splash.empty()) {
+        c.self().take_damage(1, DAMAGE_PIERCING, &c.self());
+        return;
+    }
+    for (tunit *u : splash)
+        u->take_damage(1, DAMAGE_CANT_BE_INCREASED, &c.self());
 }
 
 
 // This unit may spend speed tokens as strength. May pass through units but not end their turn in their spaces.
 void hellwheel(taction &c)
 {
+    return c.unimplemented();
 }
 
 
 // When taking damage, gain 1 berserk and 1 strength. This effect can't trigger more than once a round.
 void steaming_rage(taction &c)
 {
+    if (c.trigger() == TRIGGER_ROUND_START) {
+        c.self().set_counter(COUNTER_STEAMING_RAGE, 1);
+        return;
+    }
+    if (c.trigger() == TRIGGER_AFTER_DAMAGED) {
+        if (!c.self().counter(COUNTER_STEAMING_RAGE))
+            return c.no_resources();
+
+        c.self().set_counter(COUNTER_STEAMING_RAGE, 0);
+        c.self().gain_token(TOKEN_BERSERK);
+        c.self().gain_token(TOKEN_STRENGTH);
+        return;
+    }
 }
 
 
 // Self. Effect: MOVE as far as possible in a straight line, passing through units. Then, units passed through during this movement take 1 damage.
 void charge(taction &c)
 {
+    return c.unimplemented();
 }
 
 
 // Attack, melee. On hit: 1 damage and 1 damage to another adjacent unit.
 void cleave(taction &c)
 {
+    list<tunit *> us = c.self().units_in_range(1, 1);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    if (!c.is_hit(*u, c.player_roll_d6(c.self(), ROLL_TAG_ATTACK)))
+        return u->take_damage(1, DAMAGE_GRAZE, &c.self());
+
+    u->take_damage(1, DAMAGE_NORMAL, &c.self());
+
+    us.remove(u);
+    if (us.empty())
+        return;
+
+    u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    u->take_damage(1, DAMAGE_NORMAL, &c.self());
 }
 
 
 // Self. Effect: Gain 1 strength and speed (4+) and retaliation until start of this unit's next turn.
 void rev(taction &c)
 {
+    return c.unimplemented();
 }
 
 
 // Attack, melee. On hit: 1 damage, Effect: (4+): 1 damage again, (6+): 1 damage again.
 void chainsaw(taction &c)
 {
+    bool swing = c.self().has_upgrade(UPGRADE_HEAVY_SWING);
+    if (swing && c.player_may_take_action(TAKE_ACTION_STEP))
+        c.unit_step(c.self(), 1);
+
+    list<tunit *> us = c.self().units_in_range(1, 1);
+    if (us.empty()) {
+        if (swing)
+            return;
+        return c.no_target();
+    }
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    if (!c.is_hit(*u, c.player_roll_d6(c.self(), ROLL_TAG_ATTACK)))
+        u->take_damage(1, DAMAGE_GRAZE, &c.self());
+    else {
+        bool bloody = c.self().has_upgrade(UPGRADE_BLOODY_TEETH) && c.self().hp() == 0;
+        int type = bloody ? DAMAGE_PIERCING : DAMAGE_NORMAL;
+        int d6 = c.player_roll_d6(c.self());
+        int times = c.d6_gradations(d6, {{0, 1}, {4, 2}, {6, 3}});
+        while (times--) {
+            u->take_damage(1, type, &c.self());
+            if (!c.then())
+                return;
+        }
+    }
+
+    if (swing && c.player_may_take_action(TAKE_ACTION_STEP))
+        c.unit_step(c.self(), 1);
 }
 
 
 // Self. Effect: MOVE as far as possible in a straight line. Then, all units adjacent to any space of this MOVE take 1 fire damage.
 void wild_slashes(taction &c)
 {
+
 }
 
 
 // Curse, Range 1-3. Effect: Unit gains 2 berserk or 2 speed.
 void pain_frenzy(taction &c)
 {
+    list<tunit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_WITHOUT_CURSEPROOF);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    optional<token_type> tt = c.player_must_select_token_type({TOKEN_BERSERK, TOKEN_SPEED});
+    if (!tt)
+        return;
+
+    u->gain_token(*tt, 2);
 }
 
 
 // Curse, Range 1-3. Effect: Clear all negative tokens on self or a unit, then deal 1 piercing fire damage to them. This damage can't slay a unit.
 void cauterize(taction &c)
 {
+    list<tunit *> us = c.self().units_in_range(3, enum_or(SELECT_UNIT_WITHOUT_CURSEPROOF, SELECT_UNIT_WITH_NEGATIVE_TOKENS));
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    int removed = 0;
+    for (ttoken *t : u->tokens()) {
+        if (t->is_negative()) {
+            removed += t->count();
+            u->remove_token(t->type(), t->count());
+        }
+    }
+
+    u->take_damage(removed, enum_or(DAMAGE_FIRE, DAMAGE_CANT_SLAY), &c.self());
+
+    if (c.self().has_upgrade(UPGRADE_ADRENALIZE) && u->is_ally(c.self()))
+        u->gain_token(TOKEN_SPEED, removed);
 }
 
 
 // Pull, Range 2-3. Effect: Pull unit 3.
 void meat_hook(taction &c)
 {
-}
+    list<tunit *> us = c.self().units_in_range(2, 3);
+    if (us.empty())
+        return c.no_target();
 
+    bool is3 = c.self().has_upgrade(UPGRADE_FRENZY_HOOK) && c.self().hp() <= 1;
+    int max = is3 ? 3 : 1;
+    us = c.player_must_select_units(us, 1, max);
+
+    for (tunit *u : us)
+        u->pull(c.self(), 3);
+}
 
 // Attack, Melee. On hit: 1 damage. Effect: (4+) 1 damage again. (6+) 1 damage again.
 void exfoliate(taction &c)
 {
+    list<tunit *> us = c.self().units_in_range(1, 1);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    if (!c.is_hit(*u, c.player_roll_d6(c.self(), ROLL_TAG_ATTACK)))
+        return u->take_damage(1, DAMAGE_GRAZE, &c.self());
+
+    int d6 = c.player_roll_d6(c.self());
+    int times = c.d6_gradations(d6, {{0, 1}, {4, 2}, {6, 3}});
+    while (times--) {
+        u->take_damage(1, DAMAGE_NORMAL, &c.self());
+        if (!c.then())
+            return;
+    }
 }
 
 
 // Self. Unit MOVEs as far as possible in a straight line. The first unit passed through during this MOVE take 1 fire damage. Then this unit gains 2 speed.
 void spin_out(taction &c)
 {
+    return c.unimplemented();
+}
+
+
+// At 1 hp or lower, gains super armor.
+void machineheart(taction &c)
+{
+    if (!c.self().has_upgrade(UPGRADE_MACHINEHEART))
+        return;
+
+    bool was = c.self().counter(COUNTER_MACHINEHEART);
+    bool will = c.self().hp() <= 1;
+    if (was == will)
+        return;
+
+    if (will) {
+        c.self().inc_counter(COUNTER_MACHINEHEART, +1);
+        c.self().inc_counter(COUNTER_SUPER_ARMOR, +1);
+    } else {
+        c.self().inc_counter(COUNTER_MACHINEHEART, -1);
+        c.self().inc_counter(COUNTER_SUPER_ARMOR, -1);
+    }
 }
 
 
 // Self. Effect: Pull all units in range 2 one space toward this unit. Then splash (self): 1 fire damage and destroy all adjacent walls.
 void pulverize(taction &c)
 {
+    if (c.self().has_upgrade(UPGRADE_FUEL_INJECTORS) && c.player_may_take_action(TAKE_ACTION_STEP))
+        c.unit_step(c.self(), 2);
+
+    list<tunit *> us = c.self().units_in_range(1, 2);
+    tunit *u = c.player_must_select_unit(us);
+    if (u)
+        u->pull(c.self(), 2);
+
+    us = c.self().units_in_range(1, 1);
+    for (tunit *u : us)
+        u->take_damage(1, DAMAGE_FIRE, &c.self());
+
+    list<map_pos> ps = c.self().spaces_in_range(1, 1);
+    for (const map_pos &p : ps)
+        c.destroy_wall(p);
 }
 
 
 // Self, retaliation. Effect: Gain 1 strength and 1 berserk, (4+) then gain retaliation until the end of this unit's next turn.
 void building_rage(taction &c)
 {
+    c.self().gain_token(TOKEN_STRENGTH);
+    c.self().gain_token(TOKEN_BERSERK);
+
+    int d6 = c.player_roll_d6(c.self());
+    if (d6 >= 4) {
+        c.self().inc_counter(COUNTER_RETALIATION, +1);
+        c.self().inc_counter(COUNTER_RETALIATION_DECREASE_ON_TURN_END, +2);
+    }
 }
 
 
 // Attack, melee. On hit: 2 damage. Deal 1 damage again if this unit has 3 or less HP, then deal 1 damage again if it is at 1 HP or less.
 void rip_and_tear(taction &c)
 {
+    list<tunit *> us = c.self().units_in_range(1, 1);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    if (!c.is_hit(*u, c.player_roll_d6(c.self(), ROLL_TAG_ATTACK)))
+        return u->take_damage(1, DAMAGE_GRAZE, &c.self());
+
+    int d6 = c.player_roll_d6(c.self());
+    bool slayed = false;
+    u->take_damage(2, DAMAGE_NORMAL, &c.self(), &slayed);
+
+    bool o = c.self().has_upgrade(UPGRADE_BIFURCATE);
+    if (o && slayed)
+        return c.obliterate(*u);
+
+    int extra = c.self().hp() <= 1 ? 2 : c.self().hp() <= 3 ? 1 : 0;
+    while (extra--) {
+        if (!c.then())
+            return;
+        u->take_damage(1, DAMAGE_NORMAL, &c.self(), &slayed);
+        if (o && slayed)
+            return c.obliterate(*u);
+    }
 }
 
 
 // Melee. Effect: Tinker with an adjacent unit. Unit gains 1 berserk, then roll the effect die (1-3): Increase unit’s MV stat by +1 this battle, (4-5): increase a unit’s DF stat by +1 this battle, to a max of 6+, (6+): Increase unit’s current and max HP by 1 this battle.
 void tinker(taction &c)
 {
+    return c.unimplemented();
 }
 
 
 // Range 1-3. Effect: Self or a unit in range gains 2 speed. If target is at 1 HP or lower, splash (target) 1 fire damage.
 void overlock(taction &c)
 {
+    return c.unimplemented();
 }
 
 
 // Ally, melee. Effect: Self or an adjacent ally has their HP set to 1.
 void restart_engine(taction &c)
 {
+    return c.unimplemented();
 }
 
 
 // Units affected by plague take 1 toxic damage at the end of their turn, then that unit discards a plague token. This damage cannot be reduced or ignored in any way (by tokens or armor) but cannot slay a unit. Gargamox units don't take damage from plague and don't remove plague tokens, but can still be affected by plague.
 void plague(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Jumps from the original target up to three times to up to three different characters, as long as each character is adjacent to the previous character.
 void infect(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Effect that triggers when this unit is slain.
 void death_burst(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Has Deathburst: Splash (self): 1 plague and 1 toxic damage to already already plagued foes.
 void toxic_revenge(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Immune to hazards. May treat plague tokens as strength.
 void plaguebearer(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Has Deathburst: Splash (self): Remove any 1 token from all units in the area.
 void deathwash(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Has Deathburst: create a hazard under a number of units in range 2 equal to the number of plague tokens in this unit.
 void swarm_release(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Has Deathburst: Remove up to three plague tokens on this unit, then splash (self): 1 toxic damage, once, per plague token removed.
 void vile_rupture(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Has deathburst: summon a slimelet in a free adjacent space. Unlike other summons, the slimelet can be freely activated this round.
 void burst_guts(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Follows all summon rules, but can act this round.
 void spit_up(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Can be activated two at a time.
 void summoned_thrall(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Range 2-3. Effect: Pull unit one. This gains +1 range and pull for each plague token on this unit.
 void pseudopod(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Attack, melee. On hit: 1 damage and 1 plague.
 void shamble(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Range 1-3. Effect: Create a hazard in a free space in range 3 and inflict plague on an adjacent target (4+) all adjacent targets.
 void pustulate(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Line 4. Line: 1 plague. Already plagued foes gain 1 slow.
 void vomitous_mass(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Attack, melee. On hit: 1 toxic damage and infect: 1 toxic damage.
 void rotblade(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Curse, Range 1-3. Effect: Unit permanently gains death burst: splash (self): 1 toxic damage and 1 plague. This effect cannot stack with itself but stacks with other death burst effects.
 void suppurate(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Curse, Range 1-3. Effect: Strip all plague tokens from a unit in range. Foes take 1 toxic damage. Then, they gain 1 slow per token removed. Allies gain 1 strength per token removed.
 void evolve_strain(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Range 1-3. Effect: Unit triggers deathburst without being slain.
 void swell_with_corruption(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Range 2-4. Effect: Create one, (3+) two, or (5+) three hazards in range. May spend a plague token on self to re-roll the effect die once.
 void propagate_swarm(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Attack, Range 2-4. On hit: 2 damage and pull 1. Infect: 1 damage and pull 1. Effect: Allies take no damage.
 void driving_vermin(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Self. Effect: Inflict two, (5+) or three plague tokens on self, then may inflict 1 slow on an adjacent unit per plague token gained.
 void percolate(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Self. Effect: MOVE with free movement in a straight line. During this move, is immune to hazards and may move through walls and units. Any foe this unit passes through takes 1 toxic damage and this unit may pass off any plague tokens on this unit to affected units.
 void surge(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Attack, Range 2-3. On hit: 1 toxic damage (3+) and create a hazard under target. Ignores armor against units already in hazards.
 void toxic_spit(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Range 1-2. Effect: Push target unit 1 space, then create one hazard in a space they vacated. If this unit is plagued, push 2 instead.
 void projectile_vomit(taction &c)
 {
+    return c.unimplemented();
 }
 
 
 // Any unit affected by at least one Doom token takes 4 devil damage at the end of round 4. A unit can only clear a Doom token by slaying another unit and they cannot be cleared in any other way.
 void doom(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Gains extra effects against units with no allies adjacent.
 void isolation(taction &c)
 {
+    return c.unimplemented();
 }
 
 // When slain, does not remove Doom, and (5+) Dooms slayer.
 void inverted_crucifix(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Has free movement while adjacent to a wall.
 void slither(taction &c)
 {
+    return c.unimplemented();
 }
 
 // When MOVEing a second time or more in a turn, can remove this unit from the battlefield and place it any free space in range 4, then clear a token.
 void teleport(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Abilities ignore line of sight.
 void soul_sight(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Before MOVEing, may remove and place any adjacent walls in any other free adjacent spaces.
 void labyrinth_master(taction &c)
 {
+    return c.unimplemented();
 }
 
 // The Geist is bound to the stone of Anzenmezzeron. It cannot MOVE or step. At the start of its turn, teleport it to any space adjacent to a wall. At the start of combat, place a wall in a free adjacent space to it.
 void buried_alive(taction &c)
 {
+    return c.unimplemented();
 }
 
 // If not adjacent to a wall, the geist loses all armor.
 void tomb_bound(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Range 2-4. Effect: Pull 1. Ignores line of sight.
 void beckon(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Attack, melee. On hit: 1 damage and (4+) Dooms unit.
 void shudder(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Melee, Range 1-2. Effect: Create a wall, (3+) then create adverse terrain (5+) then create adverse terrain again.
 void tombraiser(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Range 2-4. Effect: Pull 1, ignoring line of sight. If pulling a unit into a wall, pull 3 instead and the kidnapped unit can pass through walls and units during this pull.
 void kidnap(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Attack, melee. On hit: 2 damage, then against isolated units inflict 1 weak (4+) and Doom them.
 void serpents_kiss(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Curse, Self. Curse: Splash (self): foes gain 1 weak, (5+) and are Doomed. Doomed units take 1 curse damage.
 void horrendous_shriek(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Attack, melee. On hit: 2 curse damage. Effect: Against isolated units, gain 1 strength and may then MOVE again.
 void urgal_blade(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Line 4. Effect: Line: 1 curse damage, Isolated units take 1 curse damage again. May penetrate walls and does not damage walls. Effect: If this line passes through a wall, this unit gains 1 strength.
 void bale_scream(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Range 2-4. Effect: Create a wall in range and (5+) adjacent foes to the wall gain 1 weak.
 void tombstone(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Curse, Range 1-4, requires isolated unit. Effect: Choose an isolated unit. That unit gains 2 weak and may no longer MOVE or step until the end of its next turn or unit it's no longer isolated.
 void hells_grasp(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Curse, Range 2-4. Effect: Unit gains 1 weak and is pulled 3.
 void beckon_lamb(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Attack, melee. On hit: Deals 1 damage, +1 for each of the following that is true about the target: Doomed, Isolated, Weak, In adverse terrain.
 void horrendous_end(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Attack, Range 1-2. Effect: Pull 1 before making attack. On hit: 2 damage. Against isolated units, inflicts 1 weak.
 void strangle(taction &c)
 {
+    return c.unimplemented();
 }
 
 // Range 2-3, Curse. Effect: Target unit gains 1 or (5+) 2 weak. At the end of their turn, create a wall in a free adjacent space to them.
 void grave_bind(taction &c)
 {
+    return c.unimplemented();
 }
 
 // A unit affected by a Miracle has a 5+ effect chance to instantly return to life at 1 HP at the end of any turn it is slain, clearing all tokens.
@@ -1364,7 +1658,7 @@ void miracle(taction &c)
             return;
         for (ttoken *t : c.self().tokens())
             c.self().remove_token(t->type(), t->count());
-        c.self().revive();
+        c.self().set_hp();
     }
 }
 
@@ -1563,6 +1857,7 @@ void whirling_chain(taction &c)
 // Self. Effect: Become unable to MOVE or step until start of this unit’s next turn. At the start of that turn, allied units adjacent to this unit gain 1 vitality.
 void gentleness(taction &c)
 {
+    return c.unimplemented();
 }
 
 
@@ -2024,8 +2319,11 @@ void bloodgorger(taction &c)
             c.self().gain_token(TOKEN_SPEED);
         if (d6 >= 5)
             c.self().gain_token(TOKEN_VITALITY);
-        if (d6 >= 6)
+        if (d6 >= 6) {
+            if (!c.then())
+                return;
             c.mutate(c.self());
+        }
     }
 }
 
@@ -2756,8 +3054,8 @@ void final_form(taction &c)
         return c.no_resources();
 
     c.self().inc_counter(COUNTER_CURSEPROOF, +1);
-    c.self().inc_counter(COUNTER_CURSEPROOF, +1);
     c.self().inc_counter(COUNTER_MOVEMENT_FREE, +1);
+    c.self().inc_counter(COUNTER_SUPER_ARMOR, +1);
 
     c.self().set_counter(COUNTER_ALTERED_MV, 6);
     c.self().set_counter(COUNTER_ALTERED_DF, 6);
@@ -2878,7 +3176,7 @@ void warhead(tcard &c)
     c.set_faction_type(FACTION_GOREGRINDERS, UNIT_THRALL);
     c.set_stats(4, 1, 3, ARMOR_NONE);
 
-    c.add_trait(TRIGGER_COMBAT_START, blood_rage);
+    c.add_trait(TRIGGER_AFTER_DAMAGED, blood_rage);
     c.add_trait(TRIGGER_COMBAT_START, thrall);
 
     c.add_act_ability(charge);
@@ -2895,7 +3193,7 @@ void carnifex(tcard &c)
     c.set_faction_type(FACTION_GOREGRINDERS, UNIT_SCION);
     c.set_stats(4, 4, 3, ARMOR_NONE);
 
-    c.add_trait(TRIGGER_COMBAT_START, blood_rage);
+    c.add_trait(TRIGGER_AFTER_DAMAGED, blood_rage);
 
     c.add_act_ability(rev);
     c.add_act_ability(chainsaw);
@@ -2912,7 +3210,7 @@ void pain_ghoul(tcard &c)
     c.set_faction_type(FACTION_GOREGRINDERS, UNIT_FREAK);
     c.set_stats(4, 4, 3, ARMOR_NONE);
 
-    c.add_trait(TRIGGER_COMBAT_START, blood_rage);
+    c.add_trait(TRIGGER_AFTER_DAMAGED, blood_rage);
 
     c.add_act_ability(pain_frenzy);
     c.add_act_ability(cauterize);
@@ -2929,7 +3227,7 @@ void painwheel(tcard &c)
     c.set_faction_type(FACTION_GOREGRINDERS, UNIT_HORROR);
     c.set_stats(5, 4, 3, ARMOR_NONE);
 
-    c.add_trait(TRIGGER_COMBAT_START, blood_rage);
+    c.add_trait(TRIGGER_AFTER_DAMAGED, blood_rage);
     c.add_trait(TRIGGER_COMBAT_START, hellwheel);
 
     c.add_act_ability(exfoliate);
@@ -2946,9 +3244,10 @@ void berserker(tcard &c)
     c.set_faction_type(FACTION_GOREGRINDERS, UNIT_TYRANT);
     c.set_stats(4, 6, 2, ARMOR_NONE);
 
-    c.add_trait(TRIGGER_COMBAT_START, blood_rage);
-    c.add_trait(TRIGGER_DAMAGED, steaming_rage);
+    c.add_trait(TRIGGER_AFTER_DAMAGED, blood_rage);
+    c.add_trait(enum_or(TRIGGER_ROUND_START, TRIGGER_AFTER_DAMAGED), steaming_rage);
     c.add_trait(TRIGGER_COMBAT_START, large);
+    c.add_trait(TRIGGER_AFTER_HP_CHANGED, machineheart);
 
     c.add_act_ability(pulverize);
     c.add_act_ability(building_rage);
@@ -2965,7 +3264,7 @@ void gearhead(tcard &c)
     c.set_faction_type(FACTION_GOREGRINDERS, UNIT_FREAK);
     c.set_stats(4, 4, 3, ARMOR_NONE);
 
-    c.add_trait(TRIGGER_COMBAT_START, blood_rage);
+    c.add_trait(TRIGGER_AFTER_DAMAGED, blood_rage);
 
     c.add_act_ability(tinker);
     c.add_act_ability(overlock);
