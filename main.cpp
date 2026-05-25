@@ -24,6 +24,9 @@ enum stuff
     TRIGGER_SLAINED,
     TRIGGER_AFTER_DAMAGED,
     TRIGGER_AFTER_HP_CHANGED,
+    TRIGGER_AFTER_POS_CHANGED, // should be called at EVERY map_pos travelled during move/step
+    TRIGGER_AFTER_HAZARD_CHANGED,
+    TRIGGER_AFTER_WALL_CHANGED,
 
     TRIGGER_SOUL_OWN_TURN,
     TRIGGER_SOUL_ALLIED_TURN,
@@ -37,6 +40,8 @@ enum stuff
     TAKE_ACTION_ANCILLARY_LIMBS,
     TAKE_ACTION_AUTOPHAGIA,
     TAKE_ACTION_CONSECRATE,
+    TAKE_ACTION_PROPAGATE_SWARM,
+    TAKE_ACTION_LEAP,
     TAKE_ACTION_STEP,
 
     // what bonus types can be applied to a roll?
@@ -48,10 +53,12 @@ enum stuff
     SELECT_TOKEN_ANY,
     SELECT_TOKEN_ONLY_NEGATIVE,
     SELECT_TOKEN_ONLY_POSITIVE,
+    SELECT_TOKEN_ONLY_PLAGUE,
+    SELECT_TOKEN_ONLY_REMOVABLE,
 
     // can it be negated by armor?
     DAMAGE_NORMAL,
-    DAMAGE_TOXIN,
+    DAMAGE_TOXIC,
     DAMAGE_GRAZE,
     DAMAGE_FIRE,
     DAMAGE_HOLY,
@@ -59,6 +66,7 @@ enum stuff
     DAMAGE_DEVIL,
     DAMAGE_PIERCING,
     DAMAGE_CANT_BE_INCREASED,
+    DAMAGE_CANT_BE_DECREASED,
     DAMAGE_CANT_SLAY,
 
     // what dmg types can be decreased?
@@ -84,12 +92,15 @@ enum stuff
     UNIT_TYRANT,
     UNIT_NECROMANCER,
 
-    COUNTER_FINAL_FORM,
+    COUNTER_CURSEPROOF,
+    COUNTER_HAS_COVER_FROM_ALL_DIRECTIONS,
     COUNTER_UNABLE_TO_MOVE,
     COUNTER_UNABLE_TO_STEP,
     COUNTER_IMMUNE_TO_PUSH,
     COUNTER_IMMUNE_TO_PULL,
+    COUNTER_IMMUNE_TO_HAZARDS,
     COUNTER_MOVEMENT_FREE,
+    COUNTER_MOVEMENT_THROUGH_WALLS,
     COUNTER_MOVEMENT_DESTROY_WALLS,
     COUNTER_MOVEMENT_ABSORB_CORPSES,
     COUNTER_LAST_MOVEMENT_WALLS_DESTROYED,
@@ -102,6 +113,8 @@ enum stuff
     COUNTER_IS_2X2,
     COUNTER_COST_HALF_UNIT_SLOT,
     COUNTER_ACTIVATED_TWO_AT_A_TIME,
+    // When slain, does not remove Doom, and (5+) Dooms slayer.
+    COUNTER_INVERTED_CRUCIFIX,
 
     COUNTER_FORMATION,
     COUNTER_RELOAD,
@@ -117,6 +130,14 @@ enum stuff
     COUNTER_RETALIATION_DECREASE_ON_TURN_START,
     COUNTER_RETALIATION_DECREASE_ON_TURN_END,
     COUNTER_MACHINEHEART,
+
+    COUNTER_SMOG_SHROUD,
+    // Gains death burst: splash (self): 1 toxic damage and 1 plague. This effect cannot stack with itself but stacks with other death burst effects.
+    COUNTER_SUPPURATE,
+    // Gains death burst: Create a hazard instead of a corpse.
+    COUNTER_ACID_BLOOD,
+
+    COUNTER_SLITHER,
 
     COUNTER_MIRACLE,
     COUNTER_DELAY_JUDGEMENT,
@@ -135,7 +156,7 @@ enum stuff
     // +1D to attacks per stack, and damage ignores armor. til turn end
     COUNTER_GROW_BONUS_LIMBS,
     // tick down at the of your turn, obliterated when reaches zero
-    COUNTER_CURSEPROOF,
+    COUNTER_FINAL_FORM,
 };
 
 
@@ -150,14 +171,18 @@ enum select_unit_filter
     SELECT_UNIT_WITH_POSITIVE_TOKENS,
     SELECT_UNIT_WITH_NEGATIVE_TOKENS,
     SELECT_UNIT_WITH_MUTATION_TOKENS,
+    SELECT_UNIT_WITH_PLAGUE_TOKENS,
     SELECT_UNIT_WITH_VITALITY_TOKENS,
     SELECT_UNIT_WITHOUT_CURSEPROOF,
+    SELECT_UNIT_WITH_DEATHBURST,
 
     // +1 max range if unit has cover against a target
     SELECT_UNIT_MODIFY_BRACE,
     SELECT_UNIT_IGNORE_LINE_OF_SIGHT,
     // if selects more than 1 unit, all of them must be adjacent to each other
     SELECT_UNIT_ADJACENT_TARGETS,
+    // no maximum range against isolated units
+    SELECT_UNIT_MODIFY_DEAD_GRASP,
 };
 
 
@@ -172,7 +197,6 @@ enum select_space_filter
 
 enum token_type
 {
-    TOKEN_MUTATION,
     TOKEN_STRENGTH,
     TOKEN_WEAK,
     TOKEN_SPEED,
@@ -180,6 +204,9 @@ enum token_type
     TOKEN_VITALITY,
     TOKEN_VULNERABLE,
     TOKEN_BERSERK,
+    TOKEN_PLAGUE,
+    TOKEN_DOOM,
+    TOKEN_MUTATION,
 };
 
 
@@ -190,6 +217,10 @@ enum movement_tags
     MOVEMENT_IGNORE_HAZARDS,
     MOVEMENT_DESTROY_WALLS,
     MOVEMENT_ABSORB_CORPSES,
+    // If pulling a unit into a wall, +2 distance and the kidnapped unit can pass through walls and units during this movement
+    MOVEMENT_KIDNAP,
+    // automatically added on push/pull
+    MOVEMENT_FORCED,
 };
 
 
@@ -431,7 +462,7 @@ struct tunit
     virtual void gain_token(token_type type, int count = 1) = 0;
 
     virtual void push(tunit &from, int distance = 1) = 0;
-    virtual void pull(tunit &to, int distance = 1) = 0;
+    virtual void pull(tunit &to, int distance = 1, movement_tags extra_tags = MOVEMENT_DEFAULT) = 0;
 
     virtual int inc_counter(int counter, int x, int def_value = 0) = 0;
     virtual void set_counter(int counter, int x) = 0;
@@ -447,6 +478,7 @@ struct tunit
     virtual map_pos pos() const = 0;
     virtual bool has_upgrade(upgrade) const = 0;
     virtual int unit_type() const = 0;
+    virtual int faction() const = 0;
     virtual bool is_slain() const = 0;
     virtual int n_moves() const = 0;
     virtual int n_acts() const = 0;
@@ -455,6 +487,11 @@ struct tunit
     virtual int inc_moves(int inc) = 0;
     virtual bool has_cover(tunit &from) const = 0;
     virtual bool is_in_formation() const = 0;
+    virtual bool is_isolated() const { return !is_in_formation(); }
+    // walls can't trigger effects TODO: check every ability w/ a wall in tests
+    virtual bool can_trigger_effects() const = 0;
+
+    virtual void may_treat_token_a_as_b(token_type a, token_type b) = 0;
 
     virtual int size() const { return counter(COUNTER_IS_2X2) ? 2 : 1; }
     virtual bool is_curseproof() const { return counter(COUNTER_CURSEPROOF) > 0; }
@@ -467,6 +504,7 @@ struct ttoken
     virtual int count() const = 0;
     virtual bool is_positive() const = 0;
     virtual bool is_negative() const = 0;
+    virtual bool is_removable() const = 0;
     virtual token_type type() const = 0;
 };
 
@@ -501,6 +539,7 @@ struct taction
     virtual tunit *player_may_select_unit(const list<tunit *> &units, const list<tunit *> &exclude = {}) = 0;
     virtual tunit *player_must_select_unit(const list<tunit *> &units, const list<tunit *> &exclude = {}) = 0;
     virtual list<tunit *> player_must_select_units(const list<tunit *> &units, int min, int max) = 0;
+    virtual list<tunit *> player_must_select_infect(tunit &from) = 0;
     virtual list<tunit *> player_must_select_line(int, list<map_pos> *poses = nullptr) = 0;
     virtual optional<map_pos> player_must_select_space(const map_pos &, int range, select_space_filter filter = SELECT_SPACE_EXCLUDE_NONE) = 0;
     virtual optional<map_pos> player_must_select_space(const map_pos &, int min, int max, select_space_filter filter = SELECT_SPACE_EXCLUDE_NONE) = 0;
@@ -511,6 +550,8 @@ struct taction
     virtual int d6_gradations(int d6, const map<int, int> &treshold_to_result = {}) const = 0;
     virtual bool is_headshot(int d6) const = 0;
 
+    virtual list<tunit *> units_in_range(const map_pos &, int min, int max, select_unit_filter f = SELECT_UNIT_EXCLUDE_NONE) const = 0;
+
     virtual bool is_hit(tunit &target, int d6) const = 0;
     virtual void unit_move(tunit &, movement_tags extra_tags = MOVEMENT_DEFAULT) = 0;
     // TODO: may unit trigger something on step and die? then it should be [[no_discard]] bool unit_step
@@ -520,11 +561,17 @@ struct taction
     virtual int inc_corpse(const map_pos &, int x = 0) = 0;
     virtual tunit &copy_unit(tunit &, const map_pos &new_pos) = 0;
     virtual void swap_unit_pos(tunit &, tunit &) = 0;
+    virtual void set_wall(const map_pos &) = 0;
     virtual bool is_wall(const map_pos &) const = 0;
     virtual void destroy_wall(const map_pos &) = 0;
     virtual void set_hazard(const map_pos &) = 0;
+    virtual bool is_hazard(const map_pos &) const = 0;
+    virtual void set_adverse_terrain(const map_pos &) = 0;
+    virtual bool is_adverse_terrain(const map_pos &) const = 0;
 
-    virtual void reload(tunit &t) const { t.set_counter(COUNTER_RELOAD, 0); }
+    virtual void reload(tunit &t) { t.set_counter(COUNTER_RELOAD, 0); }
+
+    virtual void trigger_deathburst(tunit &t) = 0;
 
     virtual int round() const = 0;
     virtual bool round(int x) const { return round() >= x; }
@@ -674,7 +721,7 @@ void ol45(taction &c)
 // Push, melee. Effect: Push 1 and (3+) inflict 1 vulnerable.
 void baton(taction &c)
 {
-    list<tunit *> us = c.self().units_in_range(2, 3);
+    list<tunit *> us = c.self().units_in_range(1, 1);
     if (us.empty())
         return c.no_target();
 
@@ -1045,6 +1092,7 @@ void berserk(taction &c)
 // This unit may spend speed tokens as strength. May pass through units but not end their turn in their spaces.
 void hellwheel(taction &c)
 {
+    c.self().may_treat_token_a_as_b(TOKEN_SPEED, TOKEN_STRENGTH);
     return c.unimplemented();
 }
 
@@ -1358,49 +1406,110 @@ void restart_engine(taction &c)
 // Units affected by plague take 1 toxic damage at the end of their turn, then that unit discards a plague token. This damage cannot be reduced or ignored in any way (by tokens or armor) but cannot slay a unit. Gargamox units don't take damage from plague and don't remove plague tokens, but can still be affected by plague.
 void plague(taction &c)
 {
-    return c.unimplemented();
+    ttoken *t = c.self().find_token(TOKEN_PLAGUE);
+    if (!t)
+        return;
+
+    if (c.self().faction() == FACTION_GARGAMOX)
+        return;
+
+    c.self().take_damage(1, enum_or(DAMAGE_TOXIC, DAMAGE_CANT_BE_DECREASED, DAMAGE_CANT_SLAY), nullptr);
+    c.self().remove_token(t->type(), 1);
 }
 
-// Jumps from the original target up to three times to up to three different characters, as long as each character is adjacent to the previous character.
-void infect(taction &c)
-{
-    return c.unimplemented();
-}
-
-// Effect that triggers when this unit is slain.
-void death_burst(taction &c)
-{
-    return c.unimplemented();
-}
 
 // Has Deathburst: Splash (self): 1 plague and 1 toxic damage to already already plagued foes.
 void toxic_revenge(taction &c)
 {
-    return c.unimplemented();
+    bool push = c.self().has_upgrade(UPGRADE_BLOAT) && c.self().find_token(TOKEN_PLAGUE);
+    list<tunit *> us = c.self().units_in_range(1, 1);
+    for (tunit *u : us) {
+        bool dmg = u->find_token(TOKEN_PLAGUE) && !u->is_ally(c.self());
+        u->gain_token(TOKEN_PLAGUE);
+        if (dmg)
+            u->take_damage(1, DAMAGE_TOXIC, &c.self());
+        if (push)
+            u->push(c.self(), 1);
+    }
+    if (c.self().has_upgrade(UPGRADE_AFTERMATH)) {
+        c.inc_corpse(c.self().pos(), -1);
+        c.set_hazard(c.self().pos());
+    }
 }
 
 // Immune to hazards. May treat plague tokens as strength.
 void plaguebearer(taction &c)
 {
-    return c.unimplemented();
+    c.self().set_counter(COUNTER_IMMUNE_TO_HAZARDS, 1);
+    c.self().may_treat_token_a_as_b(TOKEN_PLAGUE, TOKEN_STRENGTH);
 }
 
 // Has Deathburst: Splash (self): Remove any 1 token from all units in the area.
 void deathwash(taction &c)
 {
-    return c.unimplemented();
+    list<tunit *> us = c.self().units_in_range(1, 1);
+    for (tunit *u : us) {
+        if (!u->n_tokens())
+            continue;
+        ttoken *t = c.player_must_select_token(u->tokens());
+        if (!t)
+            return;
+        u->remove_token(t->type(), 1);
+    }
 }
 
 // Has Deathburst: create a hazard under a number of units in range 2 equal to the number of plague tokens in this unit.
 void swarm_release(taction &c)
 {
-    return c.unimplemented();
+    int n = c.self().n_tokens(SELECT_TOKEN_ONLY_PLAGUE);
+    if (!n)
+        return c.no_resources();
+
+    list<tunit *> us = c.self().units_in_range(1, 2);
+    if (us.empty())
+        return c.no_target();
+
+    us = c.player_must_select_units(us, min(n, (int)us.size()), n);
+    for (tunit *u : us)
+        c.set_hazard(u->pos());
 }
+
+
+// Immune to hazards.
+void toxic_avenger_immune_to_hazards(taction &c)
+{
+    if (!c.self().has_upgrade(UPGRADE_TOXIC_AVENGER))
+        return;
+
+    c.self().inc_counter(COUNTER_IMMUNE_TO_HAZARDS, +1);
+}
+
+
+// While standing in a hazard, gain 1 plague at turn start.
+void toxic_avenger(taction &c)
+{
+    if (!c.self().has_upgrade(UPGRADE_TOXIC_AVENGER))
+        return;
+
+    if (c.is_hazard(c.self().pos()))
+        c.self().gain_token(TOKEN_PLAGUE);
+}
+
 
 // Has Deathburst: Remove up to three plague tokens on this unit, then splash (self): 1 toxic damage, once, per plague token removed.
 void vile_rupture(taction &c)
 {
-    return c.unimplemented();
+    int n = c.self().n_tokens(TOKEN_PLAGUE);
+    optional<int> removed = c.player_must_select_token_count(min(3, n));
+    if (!removed)
+        return;
+
+    int times = *removed;
+    while (times--) {
+        c.self().remove_token(TOKEN_PLAGUE, 1);
+        for (tunit *u : c.self().units_in_range(1, 1))
+            u->take_damage(1, DAMAGE_TOXIC, &c.self());
+    }
 }
 
 // Has deathburst: summon a slimelet in a free adjacent space. Unlike other summons, the slimelet can be freely activated this round.
@@ -1424,67 +1533,281 @@ void summoned_thrall(taction &c)
 // Range 2-3. Effect: Pull unit one. This gains +1 range and pull for each plague token on this unit.
 void pseudopod(taction &c)
 {
-    return c.unimplemented();
+    int n = c.self().n_tokens(SELECT_TOKEN_ONLY_PLAGUE);
+    list<tunit *> us = c.self().units_in_range(2, 3 + n);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    u->pull(c.self(), 1 + n);
+
+    if (c.self().has_upgrade(UPGRADE_TENTACLE_WHIP) && u->find_token(TOKEN_PLAGUE))
+        u->gain_token(TOKEN_SLOW);
 }
 
 // Attack, melee. On hit: 1 damage and 1 plague.
 void shamble(taction &c)
 {
-    return c.unimplemented();
+    list<tunit *> us = c.self().units_in_range(1, 1);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    if (!c.is_hit(*u, c.player_roll_d6(c.self(), ROLL_TAG_ATTACK)))
+        return u->take_damage(1, DAMAGE_GRAZE, &c.self());
+
+    u->take_damage(1, DAMAGE_NORMAL, &c.self());
+    u->gain_token(TOKEN_PLAGUE);
 }
+
+
+// splash (self): 1 plague, and allies gain 1 strength.
+void invigorating_viscera(taction &c)
+{
+    if (!c.self().has_upgrade(UPGRADE_INVIGORATING_VISCERA))
+        return;
+
+    list<tunit *> us = c.self().units_in_range(1, 1);
+    for (tunit *u : us) {
+        u->gain_token(TOKEN_PLAGUE);
+        if (u->is_ally(c.self()))
+            u->gain_token(TOKEN_STRENGTH);
+    }
+}
+
+
+// Curseproof and cover from all directions while standing in a hazard.
+void smog_shroud(taction &c)
+{
+    if (!c.self().has_upgrade(UPGRADE_SMOG_SHROUD))
+        return;
+
+    bool was = c.self().counter(COUNTER_SMOG_SHROUD);
+    bool will = c.is_hazard(c.self().pos());
+    if (was == will)
+        return;
+
+    if (will) {
+        c.self().inc_counter(COUNTER_SMOG_SHROUD, +1);
+        c.self().inc_counter(COUNTER_CURSEPROOF, +1);
+        c.self().inc_counter(COUNTER_HAS_COVER_FROM_ALL_DIRECTIONS, +1);
+    } else {
+        c.self().inc_counter(COUNTER_SMOG_SHROUD, -1);
+        c.self().inc_counter(COUNTER_CURSEPROOF, -1);
+        c.self().inc_counter(COUNTER_HAS_COVER_FROM_ALL_DIRECTIONS, -1);
+    }
+}
+
 
 // Range 1-3. Effect: Create a hazard in a free space in range 3 and inflict plague on an adjacent target (4+) all adjacent targets.
 void pustulate(taction &c)
 {
-    return c.unimplemented();
+    optional<map_pos> p = c.player_must_select_space(c.self().pos(), 3, enum_or(SELECT_SPACE_EXCLUDE_OCCUPIED, SELECT_SPACE_EXCLUDE_WALLS));
+    if (!p)
+        return;
+
+    c.set_hazard(*p);
+
+    int d6 = c.player_roll_d6(c.self());
+    list<tunit *> us = c.units_in_range(*p, 1, 1);
+    if (us.empty())
+        return;
+
+    if (d6 < 4) {
+        tunit *u = c.player_must_select_unit(us);
+        if (!u)
+            return;
+        us = {u};
+    }
+
+    for (tunit *u : us)
+        u->gain_token(TOKEN_PLAGUE);
 }
 
 // Line 4. Line: 1 plague. Already plagued foes gain 1 slow.
 void vomitous_mass(taction &c)
 {
-    return c.unimplemented();
+    list<tunit *> us = c.player_must_select_line(4);
+    bool dmg = c.self().has_upgrade(UPGRADE_CATALYZE);
+
+    for (tunit *u : us) {
+        bool slow = u->find_token(TOKEN_PLAGUE);
+        u->gain_token(TOKEN_PLAGUE);
+        if (slow)
+            u->gain_token(TOKEN_SLOW);
+        bool in_hazard = c.is_hazard(u->pos());
+        if (dmg && in_hazard)
+            u->take_damage(1, DAMAGE_TOXIC, &c.self());
+    }
 }
 
 // Attack, melee. On hit: 1 toxic damage and infect: 1 toxic damage.
 void rotblade(taction &c)
 {
-    return c.unimplemented();
+    list<tunit *> us = c.self().units_in_range(1, 1);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    if (!c.is_hit(*u, c.player_roll_d6(c.self(), ROLL_TAG_ATTACK)))
+        return u->take_damage(1, DAMAGE_GRAZE, &c.self());
+
+    u->take_damage(1, DAMAGE_TOXIC, &c.self());
+
+    us = c.player_must_select_infect(*u);
+    for (tunit *u : us)
+        u->take_damage(1, DAMAGE_TOXIC, &c.self());
 }
 
 // Curse, Range 1-3. Effect: Unit permanently gains death burst: splash (self): 1 toxic damage and 1 plague. This effect cannot stack with itself but stacks with other death burst effects.
 void suppurate(taction &c)
 {
-    return c.unimplemented();
+    list<tunit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_WITHOUT_CURSEPROOF);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    u->inc_counter(COUNTER_SUPPURATE, +1);
+
+    if (c.self().has_upgrade(UPGRADE_ACID_BLOOD))
+        u->inc_counter(COUNTER_ACID_BLOOD, +1);
 }
 
 // Curse, Range 1-3. Effect: Strip all plague tokens from a unit in range. Foes take 1 toxic damage. Then, they gain 1 slow per token removed. Allies gain 1 strength per token removed.
 void evolve_strain(taction &c)
 {
-    return c.unimplemented();
+    list<tunit *> us;
+    bool all = false;
+    if (c.self().has_upgrade(UPGRADE_PANDEMIC)) {
+
+        all = false;
+    } else {
+        us = c.self().units_in_range(1, 3, enum_or(SELECT_UNIT_WITHOUT_CURSEPROOF, SELECT_UNIT_WITH_MUTATION_TOKENS));
+        if (us.empty())
+            return c.no_target();
+
+        tunit *u = c.player_must_select_unit(us);
+        if (!u)
+            return;
+        us = {u};
+        all = true;
+    }
+
+    for (tunit *u : us) {
+        if (!u->is_ally(c.self()))
+            u->take_damage(1, DAMAGE_TOXIC, &c.self());
+
+        ttoken *t = u->find_token(TOKEN_PLAGUE);
+        if (!t)
+            continue;
+
+        int removed = all ? t->count() : 1;
+        u->remove_token(t->type(), removed);
+        u->gain_token(u->is_ally(c.self()) ? TOKEN_STRENGTH : TOKEN_SLOW, removed);
+    }
 }
 
 // Range 1-3. Effect: Unit triggers deathburst without being slain.
 void swell_with_corruption(taction &c)
 {
-    return c.unimplemented();
+    list<tunit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_WITH_DEATHBURST);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    bool twice = c.self().has_upgrade(UPGRADE_MASSIVE_SWELL) && c.player_roll_d6(c.self()) >= 4;
+    int times = twice ? 2 : 1;
+    while (times--)
+        c.trigger_deathburst(*u);
 }
 
 // Range 2-4. Effect: Create one, (3+) two, or (5+) three hazards in range. May spend a plague token on self to re-roll the effect die once.
 void propagate_swarm(taction &c)
 {
-    return c.unimplemented();
+    int d6 = c.player_roll_d6(c.self());
+    if (c.self().find_token(TOKEN_PLAGUE) && c.player_may_take_action(TAKE_ACTION_PROPAGATE_SWARM)) {
+        d6 = max(d6, c.player_roll_d6(c.self()));
+        c.self().remove_token(TOKEN_PLAGUE, 1);
+    }
+
+    int n = c.d6_gradations(d6, {{0, 1}, {3, 2}, {5, 3}});
+    while (n--) {
+        optional<map_pos> p = c.player_must_select_space(c.self().pos(), 3);
+        if (!p)
+            return;
+        c.set_hazard(*p);
+    }
 }
 
 // Attack, Range 2-4. On hit: 2 damage and pull 1. Infect: 1 damage and pull 1. Effect: Allies take no damage.
 void driving_vermin(taction &c)
 {
-    return c.unimplemented();
+    list<tunit *> us = c.self().units_in_range(2, 4);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    if (c.self().has_upgrade(UPGRADE_DEFILER))
+        c.set_hazard(u->pos());
+
+    optional<int> removed = 0;
+    if (c.self().has_upgrade(UPGRADE_SWARM_FEED)) {
+        int max = c.self().n_tokens(TOKEN_PLAGUE);
+        removed = c.player_must_select_token_count(max);
+        if (!removed)
+            return;
+        c.self().remove_token(TOKEN_PLAGUE, *removed);
+    }
+
+    if (!c.is_hit(*u, c.player_roll_d6(c.self(), ROLL_TAG_ATTACK, *removed)))
+        return u->take_damage(1, DAMAGE_GRAZE, &c.self());
+
+    if (!u->is_ally(c.self()))
+        u->take_damage(2, DAMAGE_NORMAL, &c.self());
+    u->pull(c.self(), 1);
+
+    us = c.player_must_select_infect(*u);
+    for (tunit *u : us) {
+        if (!u->is_ally(c.self()))
+            u->take_damage(1, DAMAGE_NORMAL, &c.self());
+        u->pull(c.self(), 1);
+    }
 }
 
 // Self. Effect: Inflict two, (5+) or three plague tokens on self, then may inflict 1 slow on an adjacent unit per plague token gained.
 void percolate(taction &c)
 {
-    return c.unimplemented();
+    int d6 = c.player_roll_d6(c.self());
+    int n = c.d6_gradations(d6, {{0, 2}, {5, 3}});
+    c.self().gain_token(TOKEN_PLAGUE, n);
+
+    list<tunit *> us = c.self().units_in_range(1, 1);
+    if (us.empty())
+        return;
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    u->gain_token(TOKEN_SLOW, n);
 }
 
 // Self. Effect: MOVE with free movement in a straight line. During this move, is immune to hazards and may move through walls and units. Any foe this unit passes through takes 1 toxic damage and this unit may pass off any plague tokens on this unit to affected units.
@@ -1509,26 +1832,43 @@ void projectile_vomit(taction &c)
 // Any unit affected by at least one Doom token takes 4 devil damage at the end of round 4. A unit can only clear a Doom token by slaying another unit and they cannot be cleared in any other way.
 void doom(taction &c)
 {
-    return c.unimplemented();
+    ttoken *t = c.self().find_token(TOKEN_DOOM);
+    if (t)
+        return;
+
+    if (c.round() == 4)
+        c.self().take_damage(4, DAMAGE_DEVIL, nullptr);
 }
 
-// Gains extra effects against units with no allies adjacent.
-void isolation(taction &c)
-{
-    return c.unimplemented();
-}
 
 // When slain, does not remove Doom, and (5+) Dooms slayer.
 void inverted_crucifix(taction &c)
 {
-    return c.unimplemented();
+    c.self().set_counter(COUNTER_INVERTED_CRUCIFIX, 1);
 }
+
 
 // Has free movement while adjacent to a wall.
 void slither(taction &c)
 {
-    return c.unimplemented();
+    list<map_pos> ps = c.self().spaces_in_range(1, 1);
+    bool will = false;
+    for (const map_pos &p : ps)
+        will |= c.is_wall(p);
+
+    bool was = c.self().counter(COUNTER_SLITHER);
+    if (was == will)
+        return;
+
+    if (will) {
+        c.self().inc_counter(COUNTER_SLITHER, +1);
+        c.self().inc_counter(COUNTER_MOVEMENT_FREE, +1);
+    } else {
+        c.self().inc_counter(COUNTER_SLITHER, -1);
+        c.self().inc_counter(COUNTER_MOVEMENT_FREE, -1);
+    }
 }
+
 
 // When MOVEing a second time or more in a turn, can remove this unit from the battlefield and place it any free space in range 4, then clear a token.
 void teleport(taction &c)
@@ -1560,34 +1900,142 @@ void tomb_bound(taction &c)
     return c.unimplemented();
 }
 
+
+// May move through walls.
+void squirm(taction &c)
+{
+    if (c.self().has_upgrade(UPGRADE_SQUIRM))
+        return;
+
+    c.self().inc_counter(COUNTER_MOVEMENT_THROUGH_WALLS, +1);
+}
+
+
 // Range 2-4. Effect: Pull 1. Ignores line of sight.
 void beckon(taction &c)
 {
-    return c.unimplemented();
+    select_unit_filter f = c.self().has_upgrade(UPGRADE_DEAD_GRASP) ? enum_or(SELECT_UNIT_IGNORE_LINE_OF_SIGHT, SELECT_UNIT_MODIFY_DEAD_GRASP) : SELECT_UNIT_IGNORE_LINE_OF_SIGHT;
+    list<tunit *> us = c.self().units_in_range(2, 4, f);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    u->pull(c.self(), 1);
+
+    if (c.self().has_upgrade(UPGRADE_IMPENDING_DEATH) && u->is_isolated())
+        u->gain_token(TOKEN_WEAK);
 }
 
 // Attack, melee. On hit: 1 damage and (4+) Dooms unit.
 void shudder(taction &c)
 {
-    return c.unimplemented();
+    list<tunit *> us = c.self().units_in_range(1, 1);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    if (!c.is_hit(*u, c.player_roll_d6(c.self(), ROLL_TAG_ATTACK)))
+        return u->take_damage(1, DAMAGE_GRAZE, &c.self());
+
+    u->take_damage(1, DAMAGE_NORMAL, &c.self());
+
+    int d6 = c.player_roll_d6(c.self());
+    if (d6 >= 4)
+        u->gain_token(TOKEN_DOOM);
 }
+
+
+// May step 1 before ACTing, or step 2 and clear a token if adjacent to a wall.
+void leap(taction &c)
+{
+    if (!c.self().has_upgrade(UPGRADE_LEAP))
+        return;
+
+    list<map_pos> ps = c.self().spaces_in_range(1, 1);
+    bool wall = false;
+    for (const map_pos &p : ps)
+        wall |= c.is_wall(p);
+
+    if (!c.player_may_take_action(TAKE_ACTION_LEAP))
+        return;
+
+    c.unit_step(c.self(), wall ? 2 : 1);
+
+    if (!c.self().n_tokens(SELECT_TOKEN_ONLY_REMOVABLE))
+        return;
+
+    ttoken *t = c.player_may_select_token(c.self().tokens(), SELECT_TOKEN_ONLY_REMOVABLE);
+    if (!t)
+        return;
+
+    c.self().remove_token(t->type(), 1);
+}
+
 
 // Melee, Range 1-2. Effect: Create a wall, (3+) then create adverse terrain (5+) then create adverse terrain again.
 void tombraiser(taction &c)
 {
-    return c.unimplemented();
+    int range = c.self().has_upgrade(UPGRADE_FOUL_MONUMENTS) ? 4 : 2;
+    optional<map_pos> p = c.player_must_select_space(c.self().pos(), 1, range, SELECT_SPACE_EXCLUDE_OCCUPIED);
+    if (!p)
+        return;
+    c.set_wall(*p);
+
+    int d6 = c.player_roll_d6(c.self());
+    int n = c.d6_gradations(d6, {{0, 0}, {3, 1}, {5, 2}});
+    while (n--) {
+        p = c.player_must_select_space(c.self().pos(), 1, 2);
+        if (p)
+            c.set_adverse_terrain(*p);
+    }
 }
 
 // Range 2-4. Effect: Pull 1, ignoring line of sight. If pulling a unit into a wall, pull 3 instead and the kidnapped unit can pass through walls and units during this pull.
 void kidnap(taction &c)
 {
-    return c.unimplemented();
+    list<tunit *> us = c.self().units_in_range(2, 4, enum_or(SELECT_UNIT_IGNORE_LINE_OF_SIGHT, SELECT_UNIT_WITHOUT_CURSEPROOF));
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    u->pull(c.self(), 1, MOVEMENT_KIDNAP);
 }
 
 // Attack, melee. On hit: 2 damage, then against isolated units inflict 1 weak (4+) and Doom them.
 void serpents_kiss(taction &c)
 {
-    return c.unimplemented();
+    list<tunit *> us = c.self().units_in_range(1, 1);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    if (!c.is_hit(*u, c.player_roll_d6(c.self(), ROLL_TAG_ATTACK)))
+        return u->take_damage(1, DAMAGE_GRAZE, &c.self());
+
+    u->take_damage(2, DAMAGE_NORMAL, &c.self());
+
+    bool kiss = u->is_isolated();
+    if (c.self().has_upgrade(UPGRADE_IVORY_SERPENT))
+        kiss |= c.is_adverse_terrain(u->pos());
+
+    if (kiss) {
+        u->gain_token(TOKEN_WEAK);
+        int d6 = c.player_roll_d6(c.self());
+        if (d6 >= 4)
+            u->gain_token(TOKEN_DOOM);
+    }
 }
 
 // Curse, Self. Curse: Splash (self): foes gain 1 weak, (5+) and are Doomed. Doomed units take 1 curse damage.
@@ -2228,7 +2676,7 @@ void purge(taction &c)
     }
 
     if (c.self().has_upgrade(UPGRADE_SCOUR_FLESH) && !u->is_ally(c.self()))
-        u->take_damage(1, enum_or(DAMAGE_TOXIN, DAMAGE_PIERCING), &c.self());
+        u->take_damage(1, enum_or(DAMAGE_TOXIC, DAMAGE_PIERCING), &c.self());
 
     if (c.self().has_upgrade(UPGRADE_ABSORB)) {
         list<tunit *> us = c.self().units_in_range(3);
@@ -2785,7 +3233,7 @@ void biotoxin_injector(taction &c)
     if (!c.is_hit(*u, c.player_roll_d6(c.self(), ROLL_TAG_ATTACK)))
         return u->take_damage(1, DAMAGE_GRAZE, &c.self());
 
-    u->take_damage(1, DAMAGE_TOXIN, &c.self());
+    u->take_damage(1, DAMAGE_TOXIC, &c.self());
     u->inc_counter(COUNTER_BIOTOXIN_INJECTOR, +1);
 }
 
@@ -2809,7 +3257,7 @@ void mutagen_injector(taction &c)
         if (!t)
             break;
         u->remove_token(t->type());
-        u->take_damage(1, DAMAGE_TOXIN, &c.self());
+        u->take_damage(1, DAMAGE_TOXIC, &c.self());
     }
 }
 
@@ -2838,7 +3286,7 @@ void chaos_beam(taction &c)
             break;
         case 3:
         case 4:
-            u->take_damage(1, DAMAGE_TOXIN, &c.self());
+            u->take_damage(1, DAMAGE_TOXIC, &c.self());
             u->gain_token(TOKEN_SLOW);
             break;
         case 5:
@@ -3013,7 +3461,7 @@ void recycle(taction &c)
         return c.no_resources();
 
     bool slayed = false;
-    u.take_damage(1, DAMAGE_TOXIN, &c.self(), &slayed);
+    u.take_damage(1, DAMAGE_TOXIC, &c.self(), &slayed);
     if (!slayed)
         return;
     c.obliterate(u);
@@ -3299,6 +3747,8 @@ void rotten(tcard &c)
     c.set_stats(4, 4, 3, ARMOR_PHYS);
 
     c.add_trait(TRIGGER_COMBAT_START, plaguebearer);
+    c.add_trait(TRIGGER_SLAINED, invigorating_viscera);
+    c.add_trait(enum_or(TRIGGER_AFTER_HAZARD_CHANGED, TRIGGER_AFTER_POS_CHANGED), smog_shroud);
 
     c.add_act_ability(pustulate);
     c.add_act_ability(vomitous_mass);
@@ -3333,6 +3783,8 @@ void host(tcard &c)
     c.set_stats(3, 4, 3, ARMOR_NONE);
 
     c.add_trait(TRIGGER_SLAINED, swarm_release);
+    c.add_trait(TRIGGER_COMBAT_START, toxic_avenger_immune_to_hazards);
+    c.add_trait(TRIGGER_TURN_START, toxic_avenger);
 
     c.add_act_ability(propagate_swarm);
     c.add_act_ability(driving_vermin);
@@ -3393,8 +3845,9 @@ void sacrifice(tcard &c)
     c.set_faction_type(FACTION_DEADSOULS, UNIT_THRALL);
     c.set_stats(4, 2, 4, ARMOR_NONE);
 
-    c.add_trait(TRIGGER_SLAINED, inverted_crucifix);
+    c.add_trait(TRIGGER_COMBAT_START, inverted_crucifix);
     c.add_trait(TRIGGER_COMBAT_START, thrall);
+    c.add_trait(TRIGGER_COMBAT_START, squirm);
 
     c.add_act_ability(beckon);
     c.add_act_ability(shudder);
@@ -3410,7 +3863,8 @@ void chosen(tcard &c)
     c.set_faction_type(FACTION_DEADSOULS, UNIT_SCION);
     c.set_stats(4, 3, 5, ARMOR_MAG);
 
-    c.add_trait(TRIGGER_BEFORE_MOVE, slither);
+    c.add_trait(enum_or(TRIGGER_AFTER_HAZARD_CHANGED, TRIGGER_AFTER_POS_CHANGED), slither);
+    c.add_trait(TRIGGER_BEFORE_ACT, leap)
 
     c.add_act_ability(tombraiser);
     c.add_act_ability(kidnap);
@@ -3601,6 +4055,7 @@ void exorcist(tcard &c)
 }
 
 
+// TODO: update this and other IGORRI according to the latest balance changes
 void stitch(tcard &c)
 {
     c.set_faction_type(FACTION_IGORRI, UNIT_THRALL);
