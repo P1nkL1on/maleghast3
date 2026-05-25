@@ -42,7 +42,10 @@ enum stuff
     TAKE_ACTION_CONSECRATE,
     TAKE_ACTION_PROPAGATE_SWARM,
     TAKE_ACTION_LEAP,
+    TAKE_ACTION_TELEPORT,
+    TAKE_ACTION_LABYRINTH_MASTER,
     TAKE_ACTION_STEP,
+    TAKE_ACTION_MOVE_AGAIN,
 
     // what bonus types can be applied to a roll?
     ROLL_TAG_NONE,
@@ -66,7 +69,7 @@ enum stuff
     DAMAGE_DEVIL,
     DAMAGE_PIERCING,
     DAMAGE_CANT_BE_INCREASED,
-    DAMAGE_CANT_BE_DECREASED,
+    DAMAGE_CANT_BE_REDUCED,
     DAMAGE_CANT_SLAY,
 
     // what dmg types can be decreased?
@@ -138,6 +141,8 @@ enum stuff
     COUNTER_ACID_BLOOD,
 
     COUNTER_SLITHER,
+    // may no longer MOVE or step until the end of its next turn or unit it's no longer isolated.
+    COUNTER_HELLS_GRASP,
 
     COUNTER_MIRACLE,
     COUNTER_DELAY_JUDGEMENT,
@@ -175,6 +180,8 @@ enum select_unit_filter
     SELECT_UNIT_WITH_VITALITY_TOKENS,
     SELECT_UNIT_WITHOUT_CURSEPROOF,
     SELECT_UNIT_WITH_DEATHBURST,
+    SELECT_UNIT_ISOLATED,
+    SELECT_UNIT_WITH_HP_1_OR_LOWER,
 
     // +1 max range if unit has cover against a target
     SELECT_UNIT_MODIFY_BRACE,
@@ -192,6 +199,8 @@ enum select_space_filter
     SELECT_SPACE_EXCLUDE_OCCUPIED,
     SELECT_SPACE_EXCLUDE_WALLS,
     SELECT_SPACE_EXCLUDE_CORPSELESS,
+
+    SELECT_SPACE_ONLY_WALLS,
 };
 
 
@@ -221,6 +230,8 @@ enum movement_tags
     MOVEMENT_KIDNAP,
     // automatically added on push/pull
     MOVEMENT_FORCED,
+    // remove unit from the battlefield and place it any free space in range
+    MOVEMENT_TELEPORT,
 };
 
 
@@ -443,7 +454,7 @@ template <typename T> T enum_or(T a, T b) { return T((int)a | (int)b); }
 template <typename T> T enum_or(T a, T b, T c) { return enum_or(a, enum_or(b, c)); }
 
 
-struct map_pos
+struct space
 {
     int x, y;
 };
@@ -461,6 +472,7 @@ struct tunit
     virtual bool remove_token(token_type type, int count = 1) = 0;
     virtual void gain_token(token_type type, int count = 1) = 0;
 
+    virtual void teleport(int distance) = 0;
     virtual void push(tunit &from, int distance = 1) = 0;
     virtual void pull(tunit &to, int distance = 1, movement_tags extra_tags = MOVEMENT_DEFAULT) = 0;
 
@@ -472,10 +484,10 @@ struct tunit
     virtual list<tunit *> units_in_range(int, int, select_unit_filter exclude = SELECT_UNIT_EXCLUDE_NONE) const = 0;
     virtual int corpses_in_range(int) const = 0;
     virtual int corpses_in_range(int, int) const = 0;
-    virtual list<map_pos> spaces_in_range(int, int, select_space_filter = SELECT_SPACE_EXCLUDE_NONE) const = 0;
+    virtual list<space> spaces_in_range(int, int, select_space_filter = SELECT_SPACE_EXCLUDE_NONE) const = 0;
     virtual bool is_ally(tunit &) const = 0;
     virtual void take_damage(int x, int type, tunit *from, bool *slayed = nullptr) = 0;
-    virtual map_pos pos() const = 0;
+    virtual space pos() const = 0;
     virtual bool has_upgrade(upgrade) const = 0;
     virtual int unit_type() const = 0;
     virtual int faction() const = 0;
@@ -540,34 +552,34 @@ struct taction
     virtual tunit *player_must_select_unit(const list<tunit *> &units, const list<tunit *> &exclude = {}) = 0;
     virtual list<tunit *> player_must_select_units(const list<tunit *> &units, int min, int max) = 0;
     virtual list<tunit *> player_must_select_infect(tunit &from) = 0;
-    virtual list<tunit *> player_must_select_line(int, list<map_pos> *poses = nullptr) = 0;
-    virtual optional<map_pos> player_must_select_space(const map_pos &, int range, select_space_filter filter = SELECT_SPACE_EXCLUDE_NONE) = 0;
-    virtual optional<map_pos> player_must_select_space(const map_pos &, int min, int max, select_space_filter filter = SELECT_SPACE_EXCLUDE_NONE) = 0;
-    virtual list<map_pos> player_must_select_spaces(const map_pos &, int up_to, int min, int max, select_space_filter filter = SELECT_SPACE_EXCLUDE_NONE) = 0;
+    virtual list<tunit *> player_must_select_line(int, list<space> *poses = nullptr) = 0;
+    virtual optional<space> player_must_select_space(const space &, int range, select_space_filter filter = SELECT_SPACE_EXCLUDE_NONE) = 0;
+    virtual optional<space> player_must_select_space(const space &, int min, int max, select_space_filter filter = SELECT_SPACE_EXCLUDE_NONE) = 0;
+    virtual list<space> player_must_select_spaces(const space &, int up_to, int min, int max, select_space_filter filter = SELECT_SPACE_EXCLUDE_NONE) = 0;
     virtual bool player_may_take_action(int) = 0;
     virtual bool player_may_spend_soul(int x) = 0;
     virtual int player_roll_d6(tunit &who, int tags = ROLL_TAG_NONE, int extra_mod = +0) = 0;
     virtual int d6_gradations(int d6, const map<int, int> &treshold_to_result = {}) const = 0;
     virtual bool is_headshot(int d6) const = 0;
 
-    virtual list<tunit *> units_in_range(const map_pos &, int min, int max, select_unit_filter f = SELECT_UNIT_EXCLUDE_NONE) const = 0;
+    virtual list<tunit *> units_in_range(const space &, int min, int max, select_unit_filter f = SELECT_UNIT_EXCLUDE_NONE) const = 0;
 
     virtual bool is_hit(tunit &target, int d6) const = 0;
-    virtual void unit_move(tunit &, movement_tags extra_tags = MOVEMENT_DEFAULT) = 0;
+    virtual void unit_move_again(tunit &, movement_tags extra_tags = MOVEMENT_DEFAULT) = 0;
     // TODO: may unit trigger something on step and die? then it should be [[no_discard]] bool unit_step
     virtual void unit_step(tunit &, int range = 1, movement_tags tags = MOVEMENT_DEFAULT) = 0;
     virtual void slay(tunit &) = 0;
     virtual void obliterate(tunit &) = 0;
-    virtual int inc_corpse(const map_pos &, int x = 0) = 0;
-    virtual tunit &copy_unit(tunit &, const map_pos &new_pos) = 0;
+    virtual int inc_corpse(const space &, int x = 0) = 0;
+    virtual tunit &copy_unit(tunit &, const space &new_pos) = 0;
     virtual void swap_unit_pos(tunit &, tunit &) = 0;
-    virtual void set_wall(const map_pos &) = 0;
-    virtual bool is_wall(const map_pos &) const = 0;
-    virtual void destroy_wall(const map_pos &) = 0;
-    virtual void set_hazard(const map_pos &) = 0;
-    virtual bool is_hazard(const map_pos &) const = 0;
-    virtual void set_adverse_terrain(const map_pos &) = 0;
-    virtual bool is_adverse_terrain(const map_pos &) const = 0;
+    virtual void set_wall(const space &) = 0;
+    virtual bool is_wall(const space &) const = 0;
+    virtual void destroy_wall(const space &) = 0;
+    virtual void set_hazard(const space &) = 0;
+    virtual bool is_hazard(const space &) const = 0;
+    virtual void set_adverse_terrain(const space &) = 0;
+    virtual bool is_adverse_terrain(const space &) const = 0;
 
     virtual void reload(tunit &t) { t.set_counter(COUNTER_RELOAD, 0); }
 
@@ -671,7 +683,7 @@ void scavenge_ammo(taction &c)
     if (!c.self().corpses_in_range(1, 1))
         return c.no_target();
 
-    optional<map_pos> p = c.player_must_select_space(c.self().pos(), 1, SELECT_SPACE_EXCLUDE_CORPSELESS);
+    optional<space> p = c.player_must_select_space(c.self().pos(), 1, SELECT_SPACE_EXCLUDE_CORPSELESS);
     if (!p)
         return;
 
@@ -990,12 +1002,12 @@ void catechism_devil_cannon(taction &c)
     if (c.self().counter(COUNTER_RELOAD_2))
         return reload(c);
 
-    list<map_pos> line;
+    list<space> line;
     list<tunit *> us = c.player_must_select_line(5, &line);
 
     bool heavy = c.self().has_upgrade(UPGRADE_HEAVY_CALIBER_CANNON);
     if (heavy) {
-        for (const map_pos &p : line)
+        for (const space &p : line)
             c.destroy_wall(p);
     }
 
@@ -1329,8 +1341,8 @@ void pulverize(taction &c)
     for (tunit *u : us)
         u->take_damage(1, DAMAGE_FIRE, &c.self());
 
-    list<map_pos> ps = c.self().spaces_in_range(1, 1);
-    for (const map_pos &p : ps)
+    list<space> ps = c.self().spaces_in_range(1, 1);
+    for (const space &p : ps)
         c.destroy_wall(p);
 }
 
@@ -1413,7 +1425,7 @@ void plague(taction &c)
     if (c.self().faction() == FACTION_GARGAMOX)
         return;
 
-    c.self().take_damage(1, enum_or(DAMAGE_TOXIC, DAMAGE_CANT_BE_DECREASED, DAMAGE_CANT_SLAY), nullptr);
+    c.self().take_damage(1, enum_or(DAMAGE_TOXIC, DAMAGE_CANT_BE_REDUCED, DAMAGE_CANT_SLAY), nullptr);
     c.self().remove_token(t->type(), 1);
 }
 
@@ -1608,7 +1620,7 @@ void smog_shroud(taction &c)
 // Range 1-3. Effect: Create a hazard in a free space in range 3 and inflict plague on an adjacent target (4+) all adjacent targets.
 void pustulate(taction &c)
 {
-    optional<map_pos> p = c.player_must_select_space(c.self().pos(), 3, enum_or(SELECT_SPACE_EXCLUDE_OCCUPIED, SELECT_SPACE_EXCLUDE_WALLS));
+    optional<space> p = c.player_must_select_space(c.self().pos(), 3, enum_or(SELECT_SPACE_EXCLUDE_OCCUPIED, SELECT_SPACE_EXCLUDE_WALLS));
     if (!p)
         return;
 
@@ -1747,7 +1759,7 @@ void propagate_swarm(taction &c)
 
     int n = c.d6_gradations(d6, {{0, 1}, {3, 2}, {5, 3}});
     while (n--) {
-        optional<map_pos> p = c.player_must_select_space(c.self().pos(), 3);
+        optional<space> p = c.player_must_select_space(c.self().pos(), 3);
         if (!p)
             return;
         c.set_hazard(*p);
@@ -1851,9 +1863,9 @@ void inverted_crucifix(taction &c)
 // Has free movement while adjacent to a wall.
 void slither(taction &c)
 {
-    list<map_pos> ps = c.self().spaces_in_range(1, 1);
+    list<space> ps = c.self().spaces_in_range(1, 1);
     bool will = false;
-    for (const map_pos &p : ps)
+    for (const space &p : ps)
         will |= c.is_wall(p);
 
     bool was = c.self().counter(COUNTER_SLITHER);
@@ -1873,26 +1885,53 @@ void slither(taction &c)
 // When MOVEing a second time or more in a turn, can remove this unit from the battlefield and place it any free space in range 4, then clear a token.
 void teleport(taction &c)
 {
-    return c.unimplemented();
+    if (!c.self().n_moves()) // first MOVE
+        return;
+
+    if (!c.player_may_take_action(TAKE_ACTION_TELEPORT))
+        return;
+
+    space p = c.self().pos();
+    c.self().inc_moves(-1);
+    c.self().teleport(4);
+
+    if (c.self().has_upgrade(UPGRADE_SOUL_FROST))
+        c.set_adverse_terrain(p);
 }
 
-// Abilities ignore line of sight.
-void soul_sight(taction &c)
-{
-    return c.unimplemented();
-}
 
 // Before MOVEing, may remove and place any adjacent walls in any other free adjacent spaces.
 void labyrinth_master(taction &c)
 {
-    return c.unimplemented();
+    if (c.self().spaces_in_range(1, 1, SELECT_SPACE_ONLY_WALLS).empty())
+        return c.no_target();
+
+    // nowhere to put
+    if (c.self().spaces_in_range(1, 1, SELECT_SPACE_EXCLUDE_WALLS).empty())
+        return c.no_target();
+
+    if (!c.player_may_take_action(TAKE_ACTION_LABYRINTH_MASTER))
+        return;
+
+    optional<space> src = c.player_must_select_space(c.self().pos(), 1, SELECT_SPACE_ONLY_WALLS);
+    if (!src)
+        return;
+
+    optional<space> dst = c.player_must_select_space(c.self().pos(), 1, SELECT_SPACE_EXCLUDE_WALLS);
+    if (!dst)
+        return;
+
+    c.destroy_wall(*src);
+    c.set_wall(*dst);
 }
+
 
 // The Geist is bound to the stone of Anzenmezzeron. It cannot MOVE or step. At the start of its turn, teleport it to any space adjacent to a wall. At the start of combat, place a wall in a free adjacent space to it.
 void buried_alive(taction &c)
 {
     return c.unimplemented();
 }
+
 
 // If not adjacent to a wall, the geist loses all armor.
 void tomb_bound(taction &c)
@@ -1957,9 +1996,9 @@ void leap(taction &c)
     if (!c.self().has_upgrade(UPGRADE_LEAP))
         return;
 
-    list<map_pos> ps = c.self().spaces_in_range(1, 1);
+    list<space> ps = c.self().spaces_in_range(1, 1);
     bool wall = false;
-    for (const map_pos &p : ps)
+    for (const space &p : ps)
         wall |= c.is_wall(p);
 
     if (!c.player_may_take_action(TAKE_ACTION_LEAP))
@@ -1982,7 +2021,7 @@ void leap(taction &c)
 void tombraiser(taction &c)
 {
     int range = c.self().has_upgrade(UPGRADE_FOUL_MONUMENTS) ? 4 : 2;
-    optional<map_pos> p = c.player_must_select_space(c.self().pos(), 1, range, SELECT_SPACE_EXCLUDE_OCCUPIED);
+    optional<space> p = c.player_must_select_space(c.self().pos(), 1, range, SELECT_SPACE_EXCLUDE_OCCUPIED);
     if (!p)
         return;
     c.set_wall(*p);
@@ -2041,44 +2080,187 @@ void serpents_kiss(taction &c)
 // Curse, Self. Curse: Splash (self): foes gain 1 weak, (5+) and are Doomed. Doomed units take 1 curse damage.
 void horrendous_shriek(taction &c)
 {
-    return c.unimplemented();
+    list<tunit *> us = c.self().units_in_range(1, 1, enum_or(SELECT_UNIT_WITHOUT_CURSEPROOF, SELECT_UNIT_EXCLUDE_ALLY));
+    if (us.empty())
+        return c.no_target();
+
+    int d6 = c.player_roll_d6(c.self());
+    bool hit_isolated = false;
+    for (tunit *u : us) {
+        bool dmg = u->find_token(TOKEN_DOOM);
+        u->gain_token(TOKEN_WEAK);
+        if (d6 >= 5)
+            u->gain_token(TOKEN_DOOM);
+        if (dmg)
+            u->take_damage(1, DAMAGE_CURSE, &c.self());
+        hit_isolated |= u->is_isolated();
+    }
+
+    if (c.self().has_upgrade(UPGRADE_TERRORIZE) && hit_isolated)
+        c.self().gain_token(TOKEN_STRENGTH, 2);
+
+    if (c.self().has_upgrade(UPGRADE_CONDEMN)) {
+        if (!c.then())
+            return;
+        list<tunit *> us = c.self().units_in_range(1, 1, enum_or(SELECT_UNIT_WITHOUT_CURSEPROOF, SELECT_UNIT_EXCLUDE_ALLY, SELECT_UNIT_WITH_HP_1_OR_LOWER));
+        tunit *u = c.player_must_select_unit(us);
+        if (u)
+            c.obliterate(*u);
+    }
 }
 
 // Attack, melee. On hit: 2 curse damage. Effect: Against isolated units, gain 1 strength and may then MOVE again.
 void urgal_blade(taction &c)
 {
-    return c.unimplemented();
+    list<tunit *> us = c.self().units_in_range(1, 1);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    if (!c.is_hit(*u, c.player_roll_d6(c.self(), ROLL_TAG_ATTACK)))
+        return u->take_damage(1, DAMAGE_GRAZE, &c.self());
+
+    bool effect = u->can_trigger_effects() && u->is_isolated();
+    if (effect)
+        c.self().gain_token(TOKEN_STRENGTH);
+
+    u->take_damage(1, DAMAGE_CURSE, &c.self());
+
+    if (c.then())
+        return;
+
+    if (effect && c.player_may_take_action(TAKE_ACTION_MOVE_AGAIN))
+        c.unit_move_again(c.self());
 }
+
 
 // Line 4. Effect: Line: 1 curse damage, Isolated units take 1 curse damage again. May penetrate walls and does not damage walls. Effect: If this line passes through a wall, this unit gains 1 strength.
 void bale_scream(taction &c)
 {
-    return c.unimplemented();
+    list<tunit *> us = c.player_must_select_line(4);
+    bool wall = false;
+    bool pull = c.self().has_upgrade(UPGRADE_SIREN);
+    bool corpse = c.self().has_upgrade(UPGRADE_FREEZE_SOUL);
+    for (tunit *u : us) {
+        if (!u->can_trigger_effects()) {
+            wall = true;
+            continue;
+        }
+        if (pull)
+            u->pull(c.self(), 2);
+        bool slained = false;
+        u->take_damage(1, DAMAGE_CURSE, &c.self(), &slained);
+        if (u->is_isolated())
+            u->take_damage(1, DAMAGE_CURSE, &c.self(), &slained);
+        if (slained && corpse) {
+            c.inc_corpse(u->pos(), -1);
+            c.set_adverse_terrain(u->pos());
+        }
+    }
+    if (wall)
+        c.self().gain_token(TOKEN_STRENGTH);
 }
+
 
 // Range 2-4. Effect: Create a wall in range and (5+) adjacent foes to the wall gain 1 weak.
 void tombstone(taction &c)
 {
-    return c.unimplemented();
+    optional<space> p = c.player_must_select_space(c.self().pos(), 2, 4, enum_or(SELECT_SPACE_EXCLUDE_OCCUPIED, SELECT_SPACE_EXCLUDE_WALLS));
+    if (!p)
+        return;
+
+    c.set_wall(*p);
+
+    int d6 = c.player_roll_d6(c.self());
+    bool doom = c.self().has_upgrade(UPGRADE_DOOM_BELL) && d6 >= 6;
+    for (tunit *u : c.units_in_range(*p, 1, 1)) {
+        if (u->is_ally(c.self()))
+            continue;
+        if (d6 >= 5)
+            u->gain_token(TOKEN_WEAK);
+        if (doom)
+            u->gain_token(TOKEN_DOOM);
+    }
 }
+
 
 // Curse, Range 1-4, requires isolated unit. Effect: Choose an isolated unit. That unit gains 2 weak and may no longer MOVE or step until the end of its next turn or unit it's no longer isolated.
 void hells_grasp(taction &c)
 {
-    return c.unimplemented();
+    list<tunit *> us = c.self().units_in_range(1, 4, enum_or(SELECT_UNIT_WITHOUT_CURSEPROOF, SELECT_UNIT_ISOLATED));
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    u->gain_token(TOKEN_WEAK, 2);
+    u->set_counter(COUNTER_HELLS_GRASP, 1);
 }
+
 
 // Curse, Range 2-4. Effect: Unit gains 1 weak and is pulled 3.
 void beckon_lamb(taction &c)
 {
-    return c.unimplemented();
+    select_unit_filter f = c.self().has_upgrade(UPGRADE_TO_THE_SLAUGHTER) ? enum_or(SELECT_UNIT_WITHOUT_CURSEPROOF, SELECT_UNIT_MODIFY_DEAD_GRASP) : SELECT_UNIT_WITHOUT_CURSEPROOF;
+    list<tunit *> us = c.self().units_in_range(2, 4, f);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    u->gain_token(TOKEN_WEAK);
+    u->pull(c.self(), 3);
 }
 
 // Attack, melee. On hit: Deals 1 damage, +1 for each of the following that is true about the target: Doomed, Isolated, Weak, In adverse terrain.
 void horrendous_end(taction &c)
 {
-    return c.unimplemented();
+    list<tunit *> us = c.self().units_in_range(1, 1);
+    if (us.empty())
+        return c.no_target();
+
+    tunit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    if (!c.is_hit(*u, c.player_roll_d6(c.self(), ROLL_TAG_ATTACK)))
+        return u->take_damage(1, DAMAGE_GRAZE, &c.self());
+
+    int dmg = 1;
+    if (u->find_token(TOKEN_DOOM))
+        dmg++;
+    if (u->is_isolated())
+        dmg++;
+    if (u->find_token(TOKEN_WEAK))
+        dmg++;
+    if (c.is_adverse_terrain(u->pos()))
+        dmg++;
+    bool supremacy = c.self().has_upgrade(UPGRADE_SUPREMACY) && u->unit_type() == UNIT_TYRANT;
+    int type = supremacy ? DAMAGE_CANT_BE_REDUCED : DAMAGE_NORMAL;
+    bool slayed = false;
+    u->take_damage(dmg, type, &c.self(), &slayed);
+
+    if (slayed && supremacy)
+        c.obliterate(*u);
 }
+
+
+// This unit is curseproof
+void strong_pact(taction &c)
+{
+    if (!c.self().has_upgrade(UPGRADE_STRONG_PACT))
+        return;
+
+    c.self().inc_counter(COUNTER_CURSEPROOF, +1);
+}
+
 
 // Attack, Range 1-2. Effect: Pull 1 before making attack. On hit: 2 damage. Against isolated units, inflicts 1 weak.
 void strangle(taction &c)
@@ -2185,8 +2367,8 @@ void mea_culpa(taction &c)
 
     if (c.self().has_upgrade(UPGRADE_HOLY_BLOOD)) {
         int x = d6 >= 4 ? 2 : 1;
-        list<map_pos> ps = c.player_must_select_spaces(c.self().pos(), x, 1, 1, enum_or(SELECT_SPACE_EXCLUDE_OCCUPIED, SELECT_SPACE_EXCLUDE_WALLS));
-        for (const map_pos &p : ps)
+        list<space> ps = c.player_must_select_spaces(c.self().pos(), x, 1, 1, enum_or(SELECT_SPACE_EXCLUDE_OCCUPIED, SELECT_SPACE_EXCLUDE_WALLS));
+        for (const space &p : ps)
             c.set_hazard(p);
     }
 }
@@ -2288,13 +2470,13 @@ void whirling_chain(taction &c)
     if (c.round_even())
         u->push(c.self(), 2);
     else
-        c.unit_move(c.self());
+        c.unit_move_again(c.self());
 
     if (!c.then())
         return;
 
     if (c.self().has_upgrade(UPGRADE_FIERY_CHAIN)) {
-        optional<map_pos> p = c.player_must_select_space(u->pos(), 1, 1, SELECT_SPACE_EXCLUDE_WALLS);
+        optional<space> p = c.player_must_select_space(u->pos(), 1, 1, SELECT_SPACE_EXCLUDE_WALLS);
         if (!p)
             return;
         c.set_hazard(*p);
@@ -2338,7 +2520,7 @@ void blessed_censer(taction &c)
         return c.no_target();
 
     if (can_clean_corpses && c.player_may_take_action(TAKE_ACTION_CONSECRATE)) {
-        for (const map_pos &p : c.self().spaces_in_range(1, 1))
+        for (const space &p : c.self().spaces_in_range(1, 1))
             c.inc_corpse(p, -c.inc_corpse(p, 0));
         if (!c.then())
             return;
@@ -2418,7 +2600,7 @@ void bolides(taction &c)
 
     while (n--) {
         select_space_filter f = c.self().has_upgrade(UPGRADE_SCATHE) ? SELECT_SPACE_EXCLUDE_NONE : SELECT_SPACE_EXCLUDE_OCCUPIED;
-        optional<map_pos> p = c.player_must_select_space(c.self().pos(), 2, 6, f);
+        optional<space> p = c.player_must_select_space(c.self().pos(), 2, 6, f);
         if (!p)
             return;
         if (c.is_wall(*p))
@@ -2548,7 +2730,7 @@ void thrall(taction &c)
 // When slain, leaves an extra corpse token in an adjacent space.
 void fall_to_shambles(taction &c)
 {
-    optional<map_pos> p = c.player_must_select_space(c.self().pos(), 1, 1);
+    optional<space> p = c.player_must_select_space(c.self().pos(), 1, 1);
     if (!p)
         return;
 
@@ -2625,7 +2807,7 @@ void leftovers(taction &c)
     if (c.player_roll_d6(c.self()) < 4)
         return;
 
-    optional<map_pos> p = c.player_must_select_space(c.self().pos(), 1, enum_or(SELECT_SPACE_EXCLUDE_OCCUPIED, SELECT_SPACE_EXCLUDE_WALLS));
+    optional<space> p = c.player_must_select_space(c.self().pos(), 1, enum_or(SELECT_SPACE_EXCLUDE_OCCUPIED, SELECT_SPACE_EXCLUDE_WALLS));
     if (!p)
         return;
 
@@ -2745,7 +2927,7 @@ void autophagia(taction &c)
     if (!c.player_may_take_action(TAKE_ACTION_AUTOPHAGIA))
         return;
 
-    optional<map_pos> p = c.player_must_select_space(c.self().pos(), 1, 1);
+    optional<space> p = c.player_must_select_space(c.self().pos(), 1, 1);
     if (!p)
         return;
 
@@ -2861,7 +3043,7 @@ void regurgitate(taction &c)
     int mutations = c.self().has_upgrade(UPGRADE_RAPID_ADAPTATION) ? corpses : 1;
 
     while (corpses--) {
-        optional<map_pos> p = c.player_must_select_space(u->pos(), 1, 1);
+        optional<space> p = c.player_must_select_space(u->pos(), 1, 1);
         if (!p)
             return;
         c.inc_corpse(*p, +1);
@@ -2982,7 +3164,7 @@ void flesh_whip(taction &c)
     if (!n)
         return;
 
-    optional<map_pos> p = c.player_must_select_space(u->pos(), 1);
+    optional<space> p = c.player_must_select_space(u->pos(), 1);
     if (!p)
         return;
 
@@ -3122,7 +3304,7 @@ void new_material(taction &c)
     int cs = c.d6_gradations(d6, {{1, 1}, {3, 2}, {5, 3}});
     int n = 0;
     while (cs--) {
-        optional<map_pos> p = c.player_must_select_space(c.self().pos(), 1, enum_or(SELECT_SPACE_EXCLUDE_OCCUPIED, SELECT_SPACE_EXCLUDE_WALLS));
+        optional<space> p = c.player_must_select_space(c.self().pos(), 1, enum_or(SELECT_SPACE_EXCLUDE_OCCUPIED, SELECT_SPACE_EXCLUDE_WALLS));
         if (p) {
             c.inc_corpse(*p, +1);
             ++n;
@@ -3147,14 +3329,14 @@ void clone(taction &c)
     tunit *u = c.player_must_select_unit(us);
     if (!u)
         return;
-    optional<map_pos> p = c.player_must_select_space(c.self().pos(), 2, enum_or(SELECT_SPACE_EXCLUDE_OCCUPIED, SELECT_SPACE_EXCLUDE_WALLS));
+    optional<space> p = c.player_must_select_space(c.self().pos(), 2, enum_or(SELECT_SPACE_EXCLUDE_OCCUPIED, SELECT_SPACE_EXCLUDE_WALLS));
     if (!p)
         return c.no_target();
     c.copy_unit(*u, *p);
     if (!c.then())
         return;
 
-    map_pos up = u->pos();
+    space up = u->pos();
     c.obliterate(*u);
     c.inc_corpse(up, +1);
 }
@@ -3465,7 +3647,7 @@ void recycle(taction &c)
     if (!slayed)
         return;
     c.obliterate(u);
-    optional<map_pos> p = c.player_must_select_space(u.pos(), 1, enum_or(SELECT_SPACE_EXCLUDE_OCCUPIED, SELECT_SPACE_EXCLUDE_WALLS));
+    optional<space> p = c.player_must_select_space(u.pos(), 1, enum_or(SELECT_SPACE_EXCLUDE_OCCUPIED, SELECT_SPACE_EXCLUDE_WALLS));
     if (!p)
         return;
     optional<int> n = c.player_must_select_corpse_count(3);
@@ -3864,7 +4046,7 @@ void chosen(tcard &c)
     c.set_stats(4, 3, 5, ARMOR_MAG);
 
     c.add_trait(enum_or(TRIGGER_AFTER_HAZARD_CHANGED, TRIGGER_AFTER_POS_CHANGED), slither);
-    c.add_trait(TRIGGER_BEFORE_ACT, leap)
+    c.add_trait(TRIGGER_BEFORE_ACT, leap);
 
     c.add_act_ability(tombraiser);
     c.add_act_ability(kidnap);
@@ -3876,7 +4058,7 @@ void chosen(tcard &c)
 }
 
 
-void visigheist(tcard &c)
+void vizigheist(tcard &c)
 {
     c.set_faction_type(FACTION_DEADSOULS, UNIT_HORROR);
     c.set_stats(4, 3, 5, ARMOR_MAG);
@@ -3915,6 +4097,7 @@ void bound_devil(tcard &c)
 
     c.add_trait(TRIGGER_BEFORE_MOVE, labyrinth_master);
     c.add_trait(TRIGGER_COMBAT_START, large);
+    c.add_trait(TRIGGER_COMBAT_START, strong_pact);
 
     c.add_act_ability(hells_grasp);
     c.add_act_ability(beckon_lamb);
@@ -4210,7 +4393,7 @@ void deadsouls(tfaction &c)
 {
     c.add_unit(sacrifice);
     c.add_unit(chosen);
-    c.add_unit(visigheist);
+    c.add_unit(vizigheist);
     c.add_unit(banshee);
     c.add_unit(bound_devil);
 }
