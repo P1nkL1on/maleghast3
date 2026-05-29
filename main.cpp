@@ -27,6 +27,13 @@ enum trigger_type
     TRIGGER_AFTER_POS_CHANGED, // should be called at EVERY map_pos travelled during move/step
     TRIGGER_AFTER_HAZARD_CHANGED,
     TRIGGER_AFTER_WALL_CHANGED,
+    TRIGGER_AFTER_ATTACK_DAMAGED,
+    TRIGGER_AFTER_ATTACK_HITED,
+    TRIGGER_AFTER_UNIT_MOVED,
+    TRIGGER_AFTER_UNIT_ACTED,
+    TRIGGER_AFTER_HEADSHOT,
+    TRIGGER_AFTER_UNIT_SLAINED,
+    TRIGGER_AFTER_SLAIN, // self killed other
 
     TRIGGER_SOUL_OWN_TURN,
     TRIGGER_SOUL_ALLIED_TURN,
@@ -141,6 +148,10 @@ enum trait_id
     TRAIT_IMMUNE_TO_PUSH,
     TRAIT_IMMUNE_TO_PULL,
     TRAIT_IMMUNE_TO_HAZARDS,
+    TRAIT_IMMUNE_TO_SPLASH_DAMAGE,
+    TRAIT_IMMUNE_TO_LINE_DAMAGE,
+    TRAIT_IMMUNE_TO_ALL_DAMAGE,
+    TRAIT_RANGED_ATTACKS_AUTO_MISS,
     TRAIT_MOVEMENT_FREE,
     TRAIT_MOVEMENT_THROUGH_WALLS,
     TRAIT_MOVEMENT_DESTROY_WALLS,
@@ -177,17 +188,17 @@ enum trait_id
     TRAIT_GUN_KATA,
     // Your ranged attacks gain headshot: reload
     TRAIT_CLUTCH_RELOAD,
-    TRAIT_ARMOR_LOCK,
     TRAIT_DEVIL_BULLET,
     TRAIT_UNHOLY_SIXGUN_HEADSHOTS,
+    TRAIT_OVERWATCH,
 
     TRAIT_BLOOD_RAGE,
     // After any ability resolves that damages this unit, this unit deals 1 damage back to the ability's owner, even if this unit was slain.
     TRAIT_RETALIATION,
     TRAIT_STEAMING_RAGE,
-    TRAIT_RETALIATION_DECREASE_ON_TURN_START,
-    TRAIT_RETALIATION_DECREASE_ON_TURN_END,
     TRAIT_MACHINEHEART,
+    TRAIT_NERVE_TWITCH,
+    TRAIT_BLOOD_RUSH,
 
     TRAIT_SMOG_SHROUD,
     // Gains death burst: splash (self): 1 toxic damage and 1 plague. This effect cannot stack with itself but stacks with other death burst effects.
@@ -222,31 +233,33 @@ enum trait_id
 
 enum select_unit_filter
 {
-    SELECT_UNIT_EXCLUDE_NONE,
-    SELECT_UNIT_EXCLUDE_SELF,
-    SELECT_UNIT_EXCLUDE_ALLY,
-    SELECT_UNIT_EXCLUDE_FOE,
+    SELECT_UNIT_ANY = 0,
+    SELECT_UNIT_NO_SELF = 1,
+    SELECT_UNIT_ALLY = 1 << 1,
+    SELECT_UNIT_NO_ALLY = 1 << 2,
+    SELECT_UNIT_FOE = 1 << 3,
+    SELECT_UNIT_NO_FOE = 1 << 4,
+    SELECT_UNIT_NO_WALL = 1 << 5,
 
-    SELECT_UNIT_WITH_TOKENS,
-    SELECT_UNIT_WITH_POSITIVE_TOKENS,
-    SELECT_UNIT_WITH_NEGATIVE_TOKENS,
-    SELECT_UNIT_WITH_MUTATION_TOKENS,
-    SELECT_UNIT_WITH_PLAGUE_TOKENS,
-    SELECT_UNIT_WITH_VITALITY_TOKENS,
-    SELECT_UNIT_WITHOUT_CURSEPROOF,
-    SELECT_UNIT_WITH_DEATHBURST,
-    SELECT_UNIT_ISOLATED,
-    SELECT_UNIT_WITH_HP_1_OR_LOWER,
+    SELECT_UNIT_WITH_TOKENS = 1 << 6,
+    SELECT_UNIT_WITH_POSITIVE_TOKENS = 1 << 7,
+    SELECT_UNIT_WITH_NEGATIVE_TOKENS = 1 << 8,
+    SELECT_UNIT_WITH_MUTATION_TOKENS = 1 << 9,
+    SELECT_UNIT_WITH_PLAGUE_TOKENS = 1 << 10,
+    SELECT_UNIT_WITH_VITALITY_TOKENS = 1 << 11,
+    SELECT_UNIT_NO_CURSEPROOF = 1 << 12,
+    SELECT_UNIT_WITH_DEATHBURST = 1 << 13,
+    SELECT_UNIT_ISOLATED = 1 << 14,
+    SELECT_UNIT_WITH_HP_1_OR_LOWER = 1 << 15,
 
-    // +1 max range if unit has cover against a target
-    SELECT_UNIT_MODIFY_BRACE,
-    // +2 max range if unit has cover against a target
-    SELECT_UNIT_MODIFY_BONE_WALL,
-    SELECT_UNIT_IGNORE_LINE_OF_SIGHT,
-    // if selects more than 1 unit, all of them must be adjacent to each other
-    SELECT_UNIT_ADJACENT_TARGETS,
+    SELECT_UNIT_IGNORE_LINE_OF_SIGHT = 1 << 16,
+    // +X max range if unit has cover against a target
+    SELECT_UNIT_IF_COVER_MAX_RANGE_1 = 1 << 17,
+    SELECT_UNIT_IF_COVER_MAX_RANGE_2 = 1 << 18,
     // no maximum range against isolated units
-    SELECT_UNIT_MODIFY_DEAD_GRASP,
+    SELECT_UNIT_IF_ISOLATED_MAX_RANGE_INF = 1 << 19,
+    // if selects more than 1 unit, all of them must be adjacent to each other
+    SELECT_UNIT_MULTIPLE_ADJACENT_TARGETS = 1 << 20,
 };
 
 
@@ -258,6 +271,8 @@ enum select_space_filter
     SELECT_SPACE_WALLS = 1 << 2,
     SELECT_SPACE_NO_WALLS = 1 << 3,
     SELECT_SPACE_CORPSES = 1 << 4,
+    SELECT_SPACE_NO_LINE_OF_SIGHT = 1 << 5,
+
     SELECT_SPACE_FREE = SELECT_SPACE_NO_UNIT | SELECT_SPACE_NO_WALLS,
 };
 
@@ -305,6 +320,7 @@ enum movement_tags
     MOVEMENT_FORCED,
     // remove unit from the battlefield and place it any free space in range
     MOVEMENT_TELEPORT,
+    MOVEMENT_STEP_CAN_SPEND_SPEED,
 };
 
 
@@ -527,20 +543,20 @@ template <typename T> T enum_or(T a, T b) { return T((int)a | (int)b); }
 template <typename T> T enum_or(T a, T b, T c) { return enum_or(a, enum_or(b, c)); }
 
 
-struct space;
+struct map_space;
 struct unit;
 struct token;
 struct combat;
 struct player;
 
 
-struct space
+struct map_space
 {
-    virtual ~space() = default;
-    virtual bool is_adjacent(const space &) const = 0;
-    virtual bool has_line_of_sight(const space &) const = 0;
+    virtual ~map_space() = default;
+    virtual bool is_adjacent(const map_space &) const = 0;
+    virtual bool has_line_of_sight(const map_space &) const = 0;
 
-    virtual unit *unit() const = 0;
+    virtual unit *unit_standing() const = 0;
     virtual bool is_wall() const = 0;
     virtual bool is_adverse_terrain() const = 0;
     virtual bool is_hazard() const = 0;
@@ -572,15 +588,21 @@ struct unit
     virtual void push(unit &from, int distance = 1) = 0;
     virtual void pull(unit &to, int distance = 1, movement_tags extra_tags = MOVEMENT_DEFAULT) = 0;
 
+    // TODO: make void
     virtual int inc_trait(trait_id c, int x) = 0;
     virtual void set_trait(trait_id c, int x) = 0;
     virtual int trait(trait_id c) const = 0;
 
-    virtual list<unit *> units_in_range(int, int, select_unit_filter exclude = SELECT_UNIT_EXCLUDE_NONE) const = 0;
-    virtual list<space *> spaces_in_range(int, int, select_space_filter = SELECT_SPACE_ANY) const = 0;
+    virtual void inc_trait_after(trait_id c, int x, trigger_type by_trigger, int after_n_triggers) = 0;
+    virtual void set_trait_after(trait_id c, int x, trigger_type by_trigger, int after_n_triggers) = 0;
+
+    virtual void do_after(void(*foo)(combat &), trigger_type by_trigger, int after_n_triggers) = 0;
+
+    virtual list<unit *> units_in_range(int, int, select_unit_filter exclude = SELECT_UNIT_ANY) const = 0;
+    virtual list<map_space *> spaces_in_range(int, int, select_space_filter = SELECT_SPACE_ANY) const = 0;
     int corpses_in_range(int, int) const;
 
-    virtual space *space() const = 0;
+    virtual map_space *space() const = 0;
     bool is_adjacent(const unit &other) const { return space()->is_adjacent(*other.space()); }
 
     virtual void take_damage(int x, damage_type type, unit *from) = 0;
@@ -589,10 +611,12 @@ struct unit
     virtual unit_type type() const = 0;
     virtual unit_faction faction() const = 0;
     virtual bool is_slain() const = 0;
+    virtual void set_slain(bool) = 0;
     virtual int n_moves() const = 0;
     virtual int n_acts() const = 0;
+    virtual int max_hp() const = 0;
     virtual int hp() const = 0;
-    virtual void set_hp(int hp = 1) = 0;
+    virtual void set_hp(int hp) = 0;
     virtual int inc_moves(int inc) = 0;
     virtual bool has_cover(unit &from) const = 0;
     virtual bool is_adjacent_to_ally() const = 0;
@@ -613,6 +637,7 @@ struct token
     virtual bool is_positive() const = 0;
     virtual bool is_negative() const = 0;
     virtual bool is_removable() const = 0;
+    virtual unit &host() const = 0;
 
     bool passes_filter(select_token_filter) const;
 };
@@ -649,17 +674,17 @@ struct combat
     virtual unit *player_must_select_unit(const list<unit *> &units, const list<unit *> &exclude = {}) = 0;
     virtual list<unit *> player_must_select_units(const list<unit *> &units, int min, int max) = 0;
     virtual list<unit *> player_must_select_infect(unit &from) = 0;
-    virtual list<unit *> player_must_select_line(int, list<space *>*poses = nullptr) = 0;
-    virtual space *player_must_select_space(const space *, int range, select_space_filter filter = SELECT_SPACE_ANY) = 0;
-    virtual space *player_must_select_space(const space *, int min, int max, select_space_filter filter = SELECT_SPACE_ANY) = 0;
-    virtual list<space *> player_must_select_spaces(const space *, int up_to, int min, int max, select_space_filter filter = SELECT_SPACE_ANY) = 0;
+    virtual list<unit *> player_must_select_line(int, list<map_space *>*poses = nullptr) = 0;
+    virtual map_space *player_must_select_space(const map_space *, int range, select_space_filter filter = SELECT_SPACE_ANY) = 0;
+    virtual map_space *player_must_select_space(const map_space *, int min, int max, select_space_filter filter = SELECT_SPACE_ANY) = 0;
+    virtual list<map_space *> player_must_select_spaces(const map_space *, int up_to, int min, int max, select_space_filter filter = SELECT_SPACE_ANY) = 0;
     virtual bool player_may_take_action(take_action) = 0;
     virtual bool player_may_spend_soul(int x) = 0;
     virtual int player_roll_d6(unit &who, roll_tag tags = ROLL_TAG_NONE, int extra_mod = +0) = 0;
     virtual int d6_gradations(int d6, const map<int, int> &treshold_to_result = {}) const = 0;
     virtual bool is_headshot(int d6) const = 0;
 
-    virtual list<unit *> units_in_range(const space &, int min, int max, select_unit_filter f = SELECT_UNIT_EXCLUDE_NONE) const = 0;
+    virtual list<unit *> units_in_range(const map_space &, int min, int max, select_unit_filter f = SELECT_UNIT_ANY) const = 0;
 
     virtual bool is_hit(unit &target, int d6) const = 0;
     virtual void unit_move_again(unit &, movement_tags extra_tags = MOVEMENT_DEFAULT) = 0;
@@ -667,8 +692,8 @@ struct combat
     virtual void unit_step(unit &, int range = 1, movement_tags tags = MOVEMENT_DEFAULT) = 0;
     virtual void slay(unit &) = 0;
     virtual void obliterate(unit &) = 0;
-    virtual int inc_corpse(const space &, int x = 0) = 0;
-    virtual unit &copy_unit(unit &, const space &new_pos) = 0;
+    virtual int inc_corpse(const map_space &, int x = 0) = 0;
+    virtual unit &copy_unit(unit &, const map_space &new_pos) = 0;
     virtual void swap_unit_pos(unit &, unit &) = 0;
 
     // TODO: check how ammo goblin choose what to reload? or does it reload everything?
@@ -778,7 +803,7 @@ void scavenge_ammo(combat &c)
     if (!c.self().corpses_in_range(0, 1))
         return c.no_target();
 
-    space *p = c.player_must_select_space(c.self().space(), 1, SELECT_SPACE_CORPSES);
+    map_space *p = c.player_must_select_space(c.self().space(), 1, SELECT_SPACE_CORPSES);
     if (!p)
         return;
 
@@ -796,7 +821,7 @@ void ol45(combat &c)
         return reload(c, TRAIT_RELOAD);
 
     bool brace = c.self().has_upgrade(UPGRADE_BRACE);
-    select_unit_filter f = brace ? SELECT_UNIT_MODIFY_BRACE : SELECT_UNIT_EXCLUDE_NONE;
+    select_unit_filter f = brace ? SELECT_UNIT_IF_COVER_MAX_RANGE_1 : SELECT_UNIT_ANY;
     list<unit *> us = c.self().units_in_range(2, 3, f);
     if (us.empty())
         return c.no_target();
@@ -869,7 +894,7 @@ void shieldwall(combat &c)
 void regurgitate_ammo(combat &c)
 {
     if (c.self().has_upgrade(UPGRADE_HOT_CHAMBER)) {
-        list<unit *> us = c.self().units_in_range(3, SELECT_UNIT_ADJACENT_TARGETS);
+        list<unit *> us = c.self().units_in_range(3, enum_or(SELECT_UNIT_MULTIPLE_ADJACENT_TARGETS, SELECT_UNIT_NO_WALL));
         if (us.empty())
             return c.no_target();
 
@@ -898,7 +923,7 @@ void regurgitate_ammo(combat &c)
 // Curse, Range 1-3. Effect: Unit takes 1 damage after any ACT ability resolves that pushes or pulls them. Lasts until end of this unit's next turn or until this unit has taken 3 damage this way.
 void bone_shards(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_WITHOUT_CURSEPROOF);
+    list<unit *> us = c.self().units_in_range(1, 3, enum_or(SELECT_UNIT_NO_WALL, SELECT_UNIT_NO_CURSEPROOF));
     if (us.empty())
         return c.no_target();
 
@@ -907,6 +932,7 @@ void bone_shards(combat &c)
         return;
 
     u->set_trait(TRAIT_BONE_SHARDS, 3);
+    u->set_trait_after(TRAIT_BONE_SHARDS, 0, TRIGGER_TURN_END, 1);
 
     if (c.self().has_upgrade(UPGRADE_VOMIT_BULLETS)) {
         int d6 = c.player_roll_d6(c.self());
@@ -1010,7 +1036,7 @@ void deathmark(combat &c)
 {
     bool gun = c.self().trait(TRAIT_TRANSFORM_TO_GUN);
     int max_range = gun ? 6 : 4;
-    list<unit *> us = c.self().units_in_range(2, max_range, SELECT_UNIT_WITHOUT_CURSEPROOF);
+    list<unit *> us = c.self().units_in_range(2, max_range, SELECT_UNIT_NO_CURSEPROOF);
     if (us.empty())
         return c.no_target();
 
@@ -1041,7 +1067,7 @@ void juggernaut(combat &c)
 
     c.unit_step(c.self(), MOVEMENT_DESTROY_WALLS);
 
-    list<unit *> us = c.self().units_in_range(1, 1, SELECT_UNIT_EXCLUDE_ALLY);
+    list<unit *> us = c.self().units_in_range(1, 1, SELECT_UNIT_NO_ALLY);
     if (us.empty())
         return;
 
@@ -1093,12 +1119,12 @@ void catechism_devil_cannon(combat &c)
         return reload(c, TRAIT_RELOAD_2);
     c.self().set_trait(TRAIT_RELOAD_2, 1);
 
-    list<space *> line;
+    list<map_space *> line;
     list<unit *> us = c.player_must_select_line(5, &line);
 
     bool heavy = c.self().has_upgrade(UPGRADE_HEAVY_CALIBER_CANNON);
     if (heavy) {
-        for (space *p : line)
+        for (map_space *p : line)
             p->set_wall(false);
     }
 
@@ -1150,7 +1176,7 @@ void akimbo(combat &c)
     bool bone_wall = c.self().trait(TRAIT_BONE_WALL);
     bool gun_kata = c.self().trait(TRAIT_GUN_KATA);
     int min_range = gun_kata ? 1 : 2;
-    select_unit_filter f = bone_wall ? SELECT_UNIT_MODIFY_BONE_WALL : SELECT_UNIT_EXCLUDE_NONE;
+    select_unit_filter f = bone_wall ? SELECT_UNIT_IF_COVER_MAX_RANGE_2 : SELECT_UNIT_ANY;
     list<unit *> us = c.self().units_in_range(min_range, 4, f);
     if (us.empty())
         return c.no_target();
@@ -1181,7 +1207,7 @@ void akimbo(combat &c)
         u->push(c.self(), 1);
 
     d6 = c.player_roll_d6(c.self());
-    f = bone_wall ? enum_or(SELECT_UNIT_MODIFY_BONE_WALL, SELECT_UNIT_EXCLUDE_ALLY) : SELECT_UNIT_EXCLUDE_ALLY;
+    f = bone_wall ? enum_or(SELECT_UNIT_IF_COVER_MAX_RANGE_2, SELECT_UNIT_NO_ALLY) : SELECT_UNIT_NO_ALLY;
     us = c.self().units_in_range(min_range, 4, f);
     us.remove(u);
     if (d6 < 4 || us.empty())
@@ -1226,15 +1252,19 @@ void armor_lock(combat &c)
             u->push(c.self(), 1);
     }
 
-    c.self().set_trait(TRAIT_ARMOR_LOCK, 2);
-    c.self().inc_trait(TRAIT_SUPER_ARMOR, +1);
-    c.self().inc_trait(TRAIT_HAS_COVER_FROM_ALL_DIRECTIONS, +1);
-    c.self().inc_trait(TRAIT_CAN_BE_USED_AS_COVER_BY_ALLIES, +1);
-    c.self().inc_trait(TRAIT_UNABLE_TO_MOVE, +1);
-    c.self().inc_trait(TRAIT_UNABLE_TO_STEP, +1);
-    c.self().inc_trait(TRAIT_IMMUNE_TO_PUSH, +1);
-    c.self().inc_trait(TRAIT_IMMUNE_TO_PULL, +1);
-    // TODO: add removing it
+    list<trait_id> traits = {
+        TRAIT_SUPER_ARMOR,
+        TRAIT_HAS_COVER_FROM_ALL_DIRECTIONS,
+        TRAIT_CAN_BE_USED_AS_COVER_BY_ALLIES,
+        TRAIT_UNABLE_TO_MOVE,
+        TRAIT_UNABLE_TO_STEP,
+        TRAIT_IMMUNE_TO_PUSH,
+        TRAIT_IMMUNE_TO_PULL,
+    };
+    for (trait_id t : traits) {
+        c.self().inc_trait(t, +1);
+        c.self().inc_trait_after(t, -1, TRIGGER_TURN_END, 2);
+    }
 }
 
 
@@ -1250,7 +1280,7 @@ void lv4_living_cannon(combat &c)
     bool bone_wall = c.self().trait(TRAIT_BONE_WALL);
     bool gun_kata = c.self().trait(TRAIT_GUN_KATA);
     int min_range = gun_kata ? 1 : 3;
-    select_unit_filter f = bone_wall ? SELECT_UNIT_MODIFY_BONE_WALL : SELECT_UNIT_EXCLUDE_NONE;
+    select_unit_filter f = bone_wall ? SELECT_UNIT_IF_COVER_MAX_RANGE_2 : SELECT_UNIT_ANY;
     list<unit *> us = c.self().units_in_range(min_range, 6, f);
     if (us.empty())
         return c.no_target();
@@ -1296,7 +1326,7 @@ void sg88_two_barrel_shotgun(combat &c)
     bool bone_wall = c.self().trait(TRAIT_BONE_WALL);
     bool gun_kata = c.self().trait(TRAIT_GUN_KATA);
     int min_range = gun_kata ? 1 : 2;
-    select_unit_filter f = bone_wall ? SELECT_UNIT_MODIFY_BONE_WALL : SELECT_UNIT_EXCLUDE_NONE;
+    select_unit_filter f = bone_wall ? SELECT_UNIT_IF_COVER_MAX_RANGE_2 : SELECT_UNIT_ANY;
     list<unit *> us = c.self().units_in_range(min_range, 2, f);
     if (us.empty())
         return c.no_target();
@@ -1345,7 +1375,7 @@ void unholy_sixgun(combat &c)
     bool bone_wall = c.self().trait(TRAIT_BONE_WALL);
     bool gun_kata = c.self().trait(TRAIT_GUN_KATA);
     int min_range = gun_kata ? 1 : 2;
-    select_unit_filter f = bone_wall ? SELECT_UNIT_MODIFY_BONE_WALL : SELECT_UNIT_EXCLUDE_NONE;
+    select_unit_filter f = bone_wall ? SELECT_UNIT_IF_COVER_MAX_RANGE_2 : SELECT_UNIT_ANY;
     list<unit *> us = c.self().units_in_range(min_range, 2, f);
     if (us.empty())
         return c.no_target();
@@ -1378,7 +1408,6 @@ void unholy_sixgun(combat &c)
     if (headshot)
         c.self().inc_trait(TRAIT_UNHOLY_SIXGUN_HEADSHOTS, +1);
 }
-
 
 // Self. Effect: Reload. On hit, your next attack gains piercing and triggers headshot effects.
 void devil_bullet(combat &c)
@@ -1597,7 +1626,7 @@ void wild_slashes(combat &c)
 // Curse, Range 1-3. Effect: Unit gains 2 berserk or 2 speed.
 void pain_frenzy(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_WITHOUT_CURSEPROOF);
+    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_NO_CURSEPROOF);
     if (us.empty())
         return c.no_target();
 
@@ -1616,7 +1645,7 @@ void pain_frenzy(combat &c)
 // Curse, Range 1-3. Effect: Clear all negative tokens on self or a unit, then deal 1 piercing fire damage to them. This damage can't slay a unit.
 void cauterize(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(3, enum_or(SELECT_UNIT_WITHOUT_CURSEPROOF, SELECT_UNIT_WITH_NEGATIVE_TOKENS));
+    list<unit *> us = c.self().units_in_range(3, enum_or(SELECT_UNIT_NO_CURSEPROOF, SELECT_UNIT_WITH_NEGATIVE_TOKENS));
     if (us.empty())
         return c.no_target();
 
@@ -1721,8 +1750,8 @@ void pulverize(combat &c)
     for (unit *u : us)
         u->take_damage(1, DAMAGE_FIRE, &c.self());
 
-    list<space *>ps = c.self().spaces_in_range(1, 1);
-    for (space *p : ps)
+    list<map_space *>ps = c.self().spaces_in_range(1, 1);
+    for (map_space *p : ps)
         p->set_wall(false);
 }
 
@@ -1736,7 +1765,7 @@ void building_rage(combat &c)
     int d6 = c.player_roll_d6(c.self());
     if (d6 >= 4) {
         c.self().inc_trait(TRAIT_RETALIATION, +1);
-        c.self().inc_trait(TRAIT_RETALIATION_DECREASE_ON_TURN_END, +2);
+        c.self().inc_trait_after(TRAIT_RETALIATION, -1, TRIGGER_TURN_END, 2);
     }
 }
 
@@ -1993,7 +2022,7 @@ void smog_shroud(combat &c)
 // Range 1-3. Effect: Create a hazard in a free space in range 3 and inflict plague on an adjacent target (4+) all adjacent targets.
 void pustulate(combat &c)
 {
-    space *p = c.player_must_select_space(c.self().space(), 3, SELECT_SPACE_FREE);
+    map_space *p = c.player_must_select_space(c.self().space(), 3, SELECT_SPACE_FREE);
     if (!p)
         return;
 
@@ -2055,7 +2084,7 @@ void rotblade(combat &c)
 // Curse, Range 1-3. Effect: Unit permanently gains death burst: splash (self): 1 toxic damage and 1 plague. This effect cannot stack with itself but stacks with other death burst effects.
 void suppurate(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_WITHOUT_CURSEPROOF);
+    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_NO_CURSEPROOF);
     if (us.empty())
         return c.no_target();
 
@@ -2078,7 +2107,7 @@ void evolve_strain(combat &c)
 
         all = false;
     } else {
-        us = c.self().units_in_range(1, 3, enum_or(SELECT_UNIT_WITHOUT_CURSEPROOF, SELECT_UNIT_WITH_MUTATION_TOKENS));
+        us = c.self().units_in_range(1, 3, enum_or(SELECT_UNIT_NO_CURSEPROOF, SELECT_UNIT_WITH_MUTATION_TOKENS));
         if (us.empty())
             return c.no_target();
 
@@ -2131,7 +2160,7 @@ void propagate_swarm(combat &c)
 
     int n = c.d6_gradations(d6, {{0, 1}, {3, 2}, {5, 3}});
     while (n--) {
-        space *p = c.player_must_select_space(c.self().space(), 3);
+        map_space *p = c.player_must_select_space(c.self().space(), 3);
         if (!p)
             return;
         p->set_hazard(true);
@@ -2235,9 +2264,9 @@ void inverted_crucifix(combat &c)
 // Has free movement while adjacent to a wall.
 void slither(combat &c)
 {
-    list<space *>ps = c.self().spaces_in_range(1, 1);
+    list<map_space *>ps = c.self().spaces_in_range(1, 1);
     bool will = false;
-    for (const space *p : ps)
+    for (const map_space *p : ps)
         will |= p->is_wall();
 
     bool was = c.self().trait(TRAIT_SLITHER);
@@ -2263,7 +2292,7 @@ void teleport(combat &c)
     if (!c.player_may_take_action(TAKE_ACTION_TELEPORT))
         return;
 
-    space *p = c.self().space();
+    map_space *p = c.self().space();
     c.self().inc_moves(-1);
     c.self().teleport(4);
 
@@ -2285,11 +2314,11 @@ void labyrinth_master(combat &c)
     if (!c.player_may_take_action(TAKE_ACTION_LABYRINTH_MASTER))
         return;
 
-    space *src = c.player_must_select_space(c.self().space(), 1, SELECT_SPACE_WALLS);
+    map_space *src = c.player_must_select_space(c.self().space(), 1, SELECT_SPACE_WALLS);
     if (!src)
         return;
 
-    space *dst = c.player_must_select_space(c.self().space(), 1, SELECT_SPACE_NO_WALLS);
+    map_space *dst = c.player_must_select_space(c.self().space(), 1, SELECT_SPACE_NO_WALLS);
     if (!dst)
         return;
 
@@ -2325,7 +2354,7 @@ void squirm(combat &c)
 // Range 2-4. Effect: Pull 1. Ignores line of sight.
 void beckon(combat &c)
 {
-    select_unit_filter f = c.self().has_upgrade(UPGRADE_DEAD_GRASP) ? enum_or(SELECT_UNIT_IGNORE_LINE_OF_SIGHT, SELECT_UNIT_MODIFY_DEAD_GRASP) : SELECT_UNIT_IGNORE_LINE_OF_SIGHT;
+    select_unit_filter f = c.self().has_upgrade(UPGRADE_DEAD_GRASP) ? enum_or(SELECT_UNIT_IGNORE_LINE_OF_SIGHT, SELECT_UNIT_IF_ISOLATED_MAX_RANGE_INF) : SELECT_UNIT_IGNORE_LINE_OF_SIGHT;
     list<unit *> us = c.self().units_in_range(2, 4, f);
     if (us.empty())
         return c.no_target();
@@ -2368,9 +2397,9 @@ void leap(combat &c)
     if (!c.self().has_upgrade(UPGRADE_LEAP))
         return;
 
-    list<space *>ps = c.self().spaces_in_range(1, 1);
+    list<map_space *>ps = c.self().spaces_in_range(1, 1);
     bool wall = false;
-    for (const space *p : ps)
+    for (const map_space *p : ps)
         wall |= p->is_wall();
 
     if (!c.player_may_take_action(TAKE_ACTION_LEAP))
@@ -2393,7 +2422,7 @@ void leap(combat &c)
 void tombraiser(combat &c)
 {
     int range = c.self().has_upgrade(UPGRADE_FOUL_MONUMENTS) ? 4 : 2;
-    space *p = c.player_must_select_space(c.self().space(), 1, range, SELECT_SPACE_UNIT);
+    map_space *p = c.player_must_select_space(c.self().space(), 1, range, SELECT_SPACE_UNIT);
     if (!p)
         return;
     p->set_wall(true);
@@ -2410,7 +2439,7 @@ void tombraiser(combat &c)
 // Range 2-4. Effect: Pull 1, ignoring line of sight. If pulling a unit into a wall, pull 3 instead and the kidnapped unit can pass through walls and units during this pull.
 void kidnap(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(2, 4, enum_or(SELECT_UNIT_IGNORE_LINE_OF_SIGHT, SELECT_UNIT_WITHOUT_CURSEPROOF));
+    list<unit *> us = c.self().units_in_range(2, 4, enum_or(SELECT_UNIT_IGNORE_LINE_OF_SIGHT, SELECT_UNIT_NO_CURSEPROOF));
     if (us.empty())
         return c.no_target();
 
@@ -2452,7 +2481,7 @@ void serpents_kiss(combat &c)
 // Curse, Self. Curse: Splash (self): foes gain 1 weak, (5+) and are Doomed. Doomed units take 1 curse damage.
 void horrendous_shriek(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, 1, enum_or(SELECT_UNIT_WITHOUT_CURSEPROOF, SELECT_UNIT_EXCLUDE_ALLY));
+    list<unit *> us = c.self().units_in_range(1, 1, enum_or(SELECT_UNIT_NO_CURSEPROOF, SELECT_UNIT_NO_ALLY));
     if (us.empty())
         return c.no_target();
 
@@ -2474,7 +2503,7 @@ void horrendous_shriek(combat &c)
     if (c.self().has_upgrade(UPGRADE_CONDEMN)) {
         if (!c.then())
             return;
-        list<unit *> us = c.self().units_in_range(1, 1, enum_or(SELECT_UNIT_WITHOUT_CURSEPROOF, SELECT_UNIT_EXCLUDE_ALLY, SELECT_UNIT_WITH_HP_1_OR_LOWER));
+        list<unit *> us = c.self().units_in_range(1, 1, enum_or(SELECT_UNIT_NO_CURSEPROOF, SELECT_UNIT_NO_ALLY, SELECT_UNIT_WITH_HP_1_OR_LOWER));
         unit *u = c.player_must_select_unit(us);
         if (u)
             c.obliterate(*u);
@@ -2537,7 +2566,7 @@ void bale_scream(combat &c)
 // Range 2-4. Effect: Create a wall in range and (5+) adjacent foes to the wall gain 1 weak.
 void tombstone(combat &c)
 {
-    space *p = c.player_must_select_space(c.self().space(), 2, 4, enum_or(SELECT_SPACE_UNIT, SELECT_SPACE_NO_WALLS));
+    map_space *p = c.player_must_select_space(c.self().space(), 2, 4, enum_or(SELECT_SPACE_UNIT, SELECT_SPACE_NO_WALLS));
     if (!p)
         return;
 
@@ -2559,7 +2588,7 @@ void tombstone(combat &c)
 // Curse, Range 1-4, requires isolated unit. Effect: Choose an isolated unit. That unit gains 2 weak and may no longer MOVE or step until the end of its next turn or unit it's no longer isolated.
 void hells_grasp(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, 4, enum_or(SELECT_UNIT_WITHOUT_CURSEPROOF, SELECT_UNIT_ISOLATED));
+    list<unit *> us = c.self().units_in_range(1, 4, enum_or(SELECT_UNIT_NO_CURSEPROOF, SELECT_UNIT_ISOLATED));
     if (us.empty())
         return c.no_target();
 
@@ -2568,14 +2597,15 @@ void hells_grasp(combat &c)
         return;
 
     u->gain_token(TOKEN_WEAK, 2);
-    u->set_trait(TRAIT_HELLS_GRASP, 1);
+    u->inc_trait(TRAIT_HELLS_GRASP, +1);
+    u->inc_trait_after(TRAIT_HELLS_GRASP, -1, TRIGGER_TURN_END, 1);
 }
 
 
 // Curse, Range 2-4. Effect: Unit gains 1 weak and is pulled 3.
 void beckon_lamb(combat &c)
 {
-    select_unit_filter f = c.self().has_upgrade(UPGRADE_TO_THE_SLAUGHTER) ? enum_or(SELECT_UNIT_WITHOUT_CURSEPROOF, SELECT_UNIT_MODIFY_DEAD_GRASP) : SELECT_UNIT_WITHOUT_CURSEPROOF;
+    select_unit_filter f = c.self().has_upgrade(UPGRADE_TO_THE_SLAUGHTER) ? enum_or(SELECT_UNIT_NO_CURSEPROOF, SELECT_UNIT_IF_ISOLATED_MAX_RANGE_INF) : SELECT_UNIT_NO_CURSEPROOF;
     list<unit *> us = c.self().units_in_range(2, 4, f);
     if (us.empty())
         return c.no_target();
@@ -2654,7 +2684,9 @@ void miracle(combat &c)
             return;
         for (token *t : c.self().tokens())
             c.self().remove_token(t->type(), t->count());
-        c.self().set_hp();
+
+        c.self().set_hp(1);
+        c.self().set_slain(false);
     }
 }
 
@@ -2682,7 +2714,7 @@ void mea_culpa(combat &c)
     if (may_step && c.player_may_take_action(TAKE_ACTION_STEP))
         c.unit_step(c.self(), 2);
 
-    list<unit *> us = c.self().units_in_range(1, 1, enum_or(SELECT_UNIT_EXCLUDE_FOE, SELECT_UNIT_WITH_NEGATIVE_TOKENS));
+    list<unit *> us = c.self().units_in_range(1, 1, enum_or(SELECT_UNIT_NO_FOE, SELECT_UNIT_WITH_NEGATIVE_TOKENS));
     if (us.empty()) {
         if (!may_step)
             return c.no_target();
@@ -2733,8 +2765,8 @@ void mea_culpa(combat &c)
 
     if (c.self().has_upgrade(UPGRADE_HOLY_BLOOD)) {
         int x = d6 >= 4 ? 2 : 1;
-        list<space *>ps = c.player_must_select_spaces(c.self().space(), x, 1, 1, enum_or(SELECT_SPACE_UNIT, SELECT_SPACE_NO_WALLS));
-        for (space *p : ps)
+        list<map_space *>ps = c.player_must_select_spaces(c.self().space(), x, 1, 1, enum_or(SELECT_SPACE_UNIT, SELECT_SPACE_NO_WALLS));
+        for (map_space *p : ps)
             p->set_hazard(true);
     }
 }
@@ -2841,7 +2873,7 @@ void whirling_chain(combat &c)
         return;
 
     if (c.self().has_upgrade(UPGRADE_FIERY_CHAIN)) {
-        space *p = c.player_must_select_space(u->space(), 1, 1, SELECT_SPACE_NO_WALLS);
+        map_space *p = c.player_must_select_space(u->space(), 1, 1, SELECT_SPACE_NO_WALLS);
         if (!p)
             return;
         p->set_hazard(true);
@@ -2870,7 +2902,8 @@ void delay_judgement(combat &c)
     if (!u->trait(TRAIT_MIRACLE))
         return u->set_trait(TRAIT_MIRACLE, 1);
 
-    u->set_trait(TRAIT_DELAY_JUDGEMENT, 1);
+    u->inc_trait(TRAIT_DELAY_JUDGEMENT, +1);
+    u->inc_trait_after(TRAIT_DELAY_JUDGEMENT, -1, TRIGGER_TURN_END, 1);
 }
 
 
@@ -2885,7 +2918,7 @@ void blessed_censer(combat &c)
         return c.no_target();
 
     if (can_clean_corpses && c.player_may_take_action(TAKE_ACTION_CONSECRATE)) {
-        for (const space *p : c.self().spaces_in_range(1, 1))
+        for (const map_space *p : c.self().spaces_in_range(1, 1))
             c.inc_corpse(*p, -c.inc_corpse(*p, 0));
         if (!c.then())
             return;
@@ -2960,7 +2993,7 @@ void bolides(combat &c)
     int n = c.d6_gradations(d6, {{0, 1}, {3, 2}, {5, 3}});
     bool scathe = c.self().has_upgrade(UPGRADE_SCATHE);
     while (n--) {
-        space *p = c.player_must_select_space(c.self().space(), 2, 6);
+        map_space *p = c.player_must_select_space(c.self().space(), 2, 6);
         if (!p)
             return;
         if (!p->is_wall()) {
@@ -2969,7 +3002,7 @@ void bolides(combat &c)
         }
         p->set_wall(false);
         if (scathe) {
-            list<unit *> us = c.units_in_range(*p, 1, 1, enum_or(SELECT_UNIT_EXCLUDE_ALLY, SELECT_UNIT_EXCLUDE_SELF));
+            list<unit *> us = c.units_in_range(*p, 1, 1, enum_or(SELECT_UNIT_NO_ALLY, SELECT_UNIT_NO_SELF));
             if (us.empty())
                 continue;
             unit *u = c.player_may_select_unit(us);
@@ -3018,14 +3051,15 @@ void ablutions(combat &c)
             x = 4;
     }
     c.self().gain_token(TOKEN_VITALITY, x);
-    c.self().set_trait(TRAIT_ABLUTIONS, 1);
+    c.self().inc_trait(TRAIT_ABLUTIONS, +1);
+    c.self().inc_trait_after(TRAIT_ABLUTIONS, -1, TRIGGER_TURN_START, 1);
 }
 
 
 // Melee, Attack. On hit: Self and an adjacent ally gain 1 vitality (Stance: R4+): 2 vitality. Then deal 1 damage and push 1. Cannot miss allies and pushes them +1.
 void bible_thump(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, SELECT_UNIT_EXCLUDE_SELF);
+    list<unit *> us = c.self().units_in_range(1, SELECT_UNIT_NO_SELF);
     if (us.empty())
         return c.no_target();
 
@@ -3040,7 +3074,7 @@ void bible_thump(combat &c)
     int x = c.round(4) ? 2 : 1;
     c.self().gain_token(TOKEN_VITALITY, x);
 
-    list<unit *> allies = c.self().units_in_range(1, enum_or(SELECT_UNIT_EXCLUDE_SELF, SELECT_UNIT_EXCLUDE_FOE));
+    list<unit *> allies = c.self().units_in_range(1, enum_or(SELECT_UNIT_NO_SELF, SELECT_UNIT_NO_FOE));
     unit *ally = c.player_must_select_unit(allies);
     if (ally)
         ally->gain_token(TOKEN_VITALITY, x);
@@ -3056,7 +3090,7 @@ void bible_thump(combat &c)
 // Self, Ally, Melee. Effect: Choose self or an adjacent ally. At the end of that unit’s turn, slay them. They splash (self) 1 holy damage to foes, 1 vitality to allies. Increase damage and vitality by +1 if the unit had 3 or more vitality.
 void blood_of_the_covenant(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, SELECT_UNIT_EXCLUDE_FOE);
+    list<unit *> us = c.self().units_in_range(1, SELECT_UNIT_NO_FOE);
     if (us.empty())
         return c.no_target();
 
@@ -3071,7 +3105,7 @@ void blood_of_the_covenant(combat &c)
 // Range 1-3, Self, Ally. Effect: Target unit converts all vitality into strength, and then becomes unable to gain vitality tokens for the rest of combat.
 void wrath(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, 3, enum_or(SELECT_UNIT_EXCLUDE_FOE, SELECT_UNIT_WITH_VITALITY_TOKENS));
+    list<unit *> us = c.self().units_in_range(1, 3, enum_or(SELECT_UNIT_NO_FOE, SELECT_UNIT_WITH_VITALITY_TOKENS));
     if (us.empty())
         return c.no_target();
 
@@ -3099,7 +3133,7 @@ void thrall(combat &c)
 // When slain, leaves an extra corpse token in an adjacent space.
 void fall_to_shambles(combat &c)
 {
-    space *p = c.player_must_select_space(c.self().space(), 1, 1);
+    map_space *p = c.player_must_select_space(c.self().space(), 1, 1);
     if (!p)
         return;
 
@@ -3146,7 +3180,7 @@ void twisting_strike(combat &c)
 
     unit *m = &c.self();
     if (c.self().has_upgrade(UPGRADE_SPREAD_MUTATE)) {
-        m = c.player_must_select_unit(c.self().units_in_range(1, SELECT_UNIT_EXCLUDE_FOE));
+        m = c.player_must_select_unit(c.self().units_in_range(1, SELECT_UNIT_NO_FOE));
         if (!m)
             return;
     }
@@ -3176,7 +3210,7 @@ void leftovers(combat &c)
     if (c.player_roll_d6(c.self()) < 4)
         return;
 
-    space *p = c.player_must_select_space(c.self().space(), 1, enum_or(SELECT_SPACE_UNIT, SELECT_SPACE_NO_WALLS));
+    map_space *p = c.player_must_select_space(c.self().space(), 1, enum_or(SELECT_SPACE_UNIT, SELECT_SPACE_NO_WALLS));
     if (!p)
         return;
 
@@ -3296,7 +3330,7 @@ void autophagia(combat &c)
     if (!c.player_may_take_action(TAKE_ACTION_AUTOPHAGIA))
         return;
 
-    space *p = c.player_must_select_space(c.self().space(), 1, 1);
+    map_space *p = c.player_must_select_space(c.self().space(), 1, 1);
     if (!p)
         return;
 
@@ -3355,7 +3389,7 @@ void regurgitate(combat &c)
         if (c.player_roll_d6(c.self()) < 5)
             return;
 
-        list<unit *> us = target->units_in_range(1, 1, enum_or(SELECT_UNIT_EXCLUDE_ALLY, SELECT_UNIT_WITH_NEGATIVE_TOKENS));
+        list<unit *> us = target->units_in_range(1, 1, enum_or(SELECT_UNIT_NO_ALLY, SELECT_UNIT_WITH_NEGATIVE_TOKENS));
         if (us.empty())
             return;
 
@@ -3384,7 +3418,7 @@ void regurgitate(combat &c)
         if (c.player_roll_d6(c.self()) < 5)
             return;
 
-        list<unit *> us = target->units_in_range(1, 1, enum_or(SELECT_UNIT_EXCLUDE_FOE, SELECT_UNIT_WITH_NEGATIVE_TOKENS));
+        list<unit *> us = target->units_in_range(1, 1, enum_or(SELECT_UNIT_NO_FOE, SELECT_UNIT_WITH_NEGATIVE_TOKENS));
         if (us.empty())
             return;
 
@@ -3407,12 +3441,12 @@ void regurgitate(combat &c)
     if (!u)
         return;
 
-    list<unit *> splash = u->units_in_range(1, SELECT_UNIT_EXCLUDE_SELF);
+    list<unit *> splash = u->units_in_range(1, SELECT_UNIT_NO_SELF);
     int corpses = min(3, (int)splash.size());
     int mutations = c.self().has_upgrade(UPGRADE_RAPID_ADAPTATION) ? corpses : 1;
 
     while (corpses--) {
-        space *p = c.player_must_select_space(u->space(), 1, 1);
+        map_space *p = c.player_must_select_space(u->space(), 1, 1);
         if (!p)
             return;
         c.inc_corpse(*p, +1);
@@ -3529,7 +3563,7 @@ void flesh_whip(combat &c)
     if (!n)
         return;
 
-    space *p = c.player_must_select_space(u->space(), 1);
+    map_space *p = c.player_must_select_space(u->space(), 1);
     if (!p)
         return;
 
@@ -3669,7 +3703,7 @@ void new_material(combat &c)
     int cs = c.d6_gradations(d6, {{1, 1}, {3, 2}, {5, 3}});
     int n = 0;
     while (cs--) {
-        space *p = c.player_must_select_space(c.self().space(), 1, enum_or(SELECT_SPACE_UNIT, SELECT_SPACE_NO_WALLS));
+        map_space *p = c.player_must_select_space(c.self().space(), 1, enum_or(SELECT_SPACE_UNIT, SELECT_SPACE_NO_WALLS));
         if (p) {
             c.inc_corpse(*p, +1);
             ++n;
@@ -3688,13 +3722,13 @@ void new_material(combat &c)
 // Range 2. Effect: Create a perfect copy of an allied unit in range in any other free space in range. Then obliterate the original as it collapses into flesh and replace it with a corpse token.
 void clone(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(2, enum_or(SELECT_UNIT_EXCLUDE_SELF, SELECT_UNIT_EXCLUDE_FOE));
+    list<unit *> us = c.self().units_in_range(2, enum_or(SELECT_UNIT_NO_SELF, SELECT_UNIT_NO_FOE));
     if (us.empty())
         return c.no_target();
     unit *u = c.player_must_select_unit(us);
     if (!u)
         return;
-    space *p = c.player_must_select_space(c.self().space(), 2, enum_or(SELECT_SPACE_UNIT, SELECT_SPACE_NO_WALLS));
+    map_space *p = c.player_must_select_space(c.self().space(), 2, enum_or(SELECT_SPACE_UNIT, SELECT_SPACE_NO_WALLS));
     if (!p)
         return c.no_target();
     c.copy_unit(*u, *p);
@@ -3925,7 +3959,7 @@ void sample_genome(combat &c)
 // (1 SOUL): Own or allied turn. Range 3. Effect: Swap places with an allied unit, then both of you mutate.
 void flesh_jump(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(3, enum_or(SELECT_UNIT_EXCLUDE_SELF, SELECT_UNIT_EXCLUDE_FOE));
+    list<unit *> us = c.self().units_in_range(3, enum_or(SELECT_UNIT_NO_SELF, SELECT_UNIT_NO_FOE));
     if (us.empty())
         return c.no_target();
 
@@ -4009,7 +4043,7 @@ void recycle(combat &c)
     u.take_damage(1, enum_or(DAMAGE_TOXIC, DAMAGE_OBLITERATE_ON_SLAY), &c.self());
     if (!u.is_slain())
         return;
-    space *p = c.player_must_select_space(u.space(), 1, enum_or(SELECT_SPACE_UNIT, SELECT_SPACE_NO_WALLS));
+    map_space *p = c.player_must_select_space(u.space(), 1, enum_or(SELECT_SPACE_UNIT, SELECT_SPACE_NO_WALLS));
     if (!p)
         return;
     optional<int> n = c.player_must_select_corpse_count(3);
@@ -4055,6 +4089,1157 @@ void final_form(combat &c)
 
     c.self().set_trait(TRAIT_FINAL_FORM, 2);
 }
+
+
+// (1 SOUL) Own or allied turn. Effect: Step 1, then you or an adjacent ally reload.
+void reload_slide(combat &c)
+{
+    c.unit_step(c.self(), 1);
+    list<unit *> us = c.self().units_in_range(0, 1, SELECT_UNIT_ALLY);
+    if (us.empty())
+        return;
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+    c.reload(*u);
+}
+
+
+// (3 SOUL) Own turn. Effect: Clear one (5+) or two negative tokens. Ranged attacks automatically miss you until the end of your next turn (5+) and you are immune to splash and line damage for the duration.
+void bullet_time(combat &c)
+{
+
+    if (!c.player_may_spend_soul(3))
+        return c.no_resources();
+
+    int d6 = c.player_roll_d6(c.self());
+    int tokens_to_clear = d6 >= 5 ? 2 : 1;
+
+    if (c.self().n_tokens(SELECT_TOKEN_NEGATIVE)) {
+        list<token *> ts = c.player_must_select_tokens(c.self().tokens(), SELECT_TOKEN_NEGATIVE);
+        for (token *t : ts)
+            c.self().remove_token(t->type(), 1);
+    }
+    c.self().inc_trait(TRAIT_RANGED_ATTACKS_AUTO_MISS, +1);
+    c.self().inc_trait_after(TRAIT_RANGED_ATTACKS_AUTO_MISS, -1, TRIGGER_TURN_END, 2);
+    if (d6 >= 5) {
+        c.self().inc_trait(TRAIT_IMMUNE_TO_SPLASH_DAMAGE, +1);
+        c.self().inc_trait_after(TRAIT_IMMUNE_TO_SPLASH_DAMAGE, -1, TRIGGER_TURN_END, 2);
+        c.self().inc_trait(TRAIT_IMMUNE_TO_LINE_DAMAGE, +1);
+        c.self().inc_trait_after(TRAIT_IMMUNE_TO_LINE_DAMAGE, -1, TRIGGER_TURN_END, 2);
+    }
+}
+
+
+// Own turn. Trigger: you reduce a unit to exactly 1 HP. Effect: you may immediately activate this ability to deal 1 damage to it.
+void double_tap(combat &c)
+{
+    unit &u = c.activated();
+    if (u.hp() != 1)
+        return c.no_target();
+
+    if (!c.player_may_spend_soul(1))
+        return c.no_resources();
+
+    u.take_damage(1, DAMAGE_PHYSICAL, &c.self());
+}
+
+
+// Own turn. Trigger: You hit an attack. Effect: Target gains 3 vulnerable after the ability resolves.
+void frag_bullet(combat &c)
+{
+    if (!c.player_may_spend_soul(1))
+        return c.no_resources();
+
+    unit &u = c.activated();
+    u.gain_token(TOKEN_VULNERABLE, 3);
+}
+
+
+// Any turn. Trigger: After any unit MOVEs. Effect: Step 2, then deal 1 damage to a unit in range 3.
+void bullet_hustle(combat &c)
+{
+    if (!c.player_may_spend_soul(2))
+        return c.no_resources();
+
+    c.unit_step(c.self(), 2);
+
+    list<unit *> us = c.self().units_in_range(1, 3);
+    if (us.empty())
+        return;
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    u->take_damage(1, DAMAGE_PHYSICAL, &c.self());
+}
+
+
+// (3 SOUL) Own turn. Effect: Reload. Until the start of your next turn, enemy units entering adjacent spaces without being pushed or pulled there take 1 damage and are pushed 1, interrupting their movement. This effect can only trigger once a turn.
+void overwatch(combat &c)
+{
+    if (!c.player_may_spend_soul(3))
+        return c.no_resources();
+
+    c.reload(c.self());
+    c.self().inc_trait(TRAIT_OVERWATCH, +1);
+    c.self().inc_trait_after(TRAIT_OVERWATCH, -1, TRIGGER_TURN_START, 1);
+}
+
+
+// (4 SOUL) Own turn. Effect: Every foe in range 2 and line of sight takes 1 piercing damage and is pushed 1.
+void bullet_sonata(combat &c) {
+    list<unit *> us = c.self().units_in_range(1, 2, SELECT_UNIT_NO_ALLY);
+    if (us.empty())
+        return c.no_target();
+
+    if (!c.player_may_spend_soul(4))
+        return c.no_resources();
+
+    for (unit *u : us) {
+        u->take_damage(1, DAMAGE_PIERCING, &c.self());
+        u->push(c.self(), 1);
+    }
+}
+
+
+// (6 SOUL) Own turn. Trigger: Headshot. Effect: Deal 6 devil damage to targeted unit, sending them Straight to the Grave.
+void straight_to_the_grave(combat &c)
+{
+    if (!c.player_may_spend_soul(6))
+        return c.no_resources();
+
+    c.activated().take_damage(6, DAMAGE_DEVIL, &c.self());
+}
+
+
+// Gain 1 berserk token at the start of your turn. You may spend berserk tokens as speed tokens and vice versa.
+void fueled_by_rage(combat &c)
+{
+    c.self().gain_token(TOKEN_BERSERK, 1);
+    c.self().may_treat_token_a_as_b(TOKEN_BERSERK, TOKEN_SPEED);
+    c.self().may_treat_token_a_as_b(TOKEN_SPEED, TOKEN_BERSERK);
+}
+
+
+// Nerve Twitch: At 3 HP or lower, DF increases to 5+.
+void nerve_twitch(combat &c)
+{
+    bool was = c.self().trait(TRAIT_NERVE_TWITCH);
+    bool will = c.self().hp() <= 3;
+    if (was == will)
+        return;
+
+    if (will) {
+        c.self().inc_trait(TRAIT_NERVE_TWITCH, +1);
+        c.self().set_trait(TRAIT_ALTERED_DF, 5);
+    } else {
+        c.self().inc_trait(TRAIT_NERVE_TWITCH, -1);
+        c.self().set_trait(TRAIT_ALTERED_DF, 0);
+    }
+}
+
+
+// Blood Drinker: Slaying a unit clears two negative tokens.
+void blood_drinker(combat &c)
+{
+    int n = c.self().n_tokens(SELECT_TOKEN_NEGATIVE);
+    if (!n)
+        return c.no_target();
+
+    n = std::min(2, n);
+    while (n--) {
+        token *t = c.player_may_select_token(c.self().tokens(), SELECT_TOKEN_NEGATIVE);
+        if (!t)
+            return;
+        c.self().remove_token(t->type(), 1);
+    }
+}
+
+
+// At 3 HP or lower, gain retaliation.
+void blood_rush(combat &c)
+{
+    bool was = c.self().trait(TRAIT_BLOOD_RUSH);
+    bool will = c.self().hp() <= 3;
+    if (was == will)
+        return;
+
+    if (will) {
+        c.self().inc_trait(TRAIT_BLOOD_RUSH, +1);
+        c.self().set_trait(TRAIT_RETALIATION, +1);
+    } else {
+        c.self().inc_trait(TRAIT_BLOOD_RUSH, -1);
+        c.self().set_trait(TRAIT_RETALIATION, -1);
+    }
+}
+
+
+// Attack, melee. On hit: 1 damage, Effect: (4+): 1 fire damage again, (6+): 1 fire damage again.
+void superheated_chainblade(combat &c)
+{
+    list<unit *> us = c.self().units_in_range(1, 1);
+    if (us.empty())
+        return c.no_target();
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    int d6 = c.player_roll_d6(c.self(), ROLL_TAG_ATTACK);
+    if (!c.is_hit(*u, d6)) {
+        u->take_damage(1, enum_or(DAMAGE_GRAZE, DAMAGE_PHYSICAL), &c.self());
+        return;
+    }
+    u->take_damage(1, DAMAGE_PHYSICAL, &c.self());
+
+    d6 = c.player_roll_d6(c.self());
+    if (d6 >= 4)
+        u->take_damage(1, DAMAGE_FIRE, &c.self());
+    if (d6 >= 6)
+        u->take_damage(1, DAMAGE_FIRE, &c.self());
+}
+
+
+// Self. Effect: Convert up to 3 negative tokens on self or adjacent allies to speed or strength tokens. Then this unit becomes curseproof until the start of its next turn.
+void quench(combat &c)
+{
+    list<unit *> us = c.self().units_in_range(0, 1, enum_or(SELECT_UNIT_NO_FOE, SELECT_UNIT_WITH_NEGATIVE_TOKENS));
+    list<token *> ts;
+    int n = 0;
+    for (unit *u : us) {
+        n += u->n_tokens(SELECT_TOKEN_NEGATIVE);
+        list<token *> uts = u->tokens();
+        ts.insert(ts.end(), uts.begin(), uts.end());
+    }
+
+    n = min(3, n);
+    while (n--) {
+        token *t = c.player_may_select_token(ts, SELECT_TOKEN_NEGATIVE);
+        if (!t)
+            break;
+        t->host().remove_token(t->type(), 1);
+        optional<token_type> tt = c.player_may_select_token_type({TOKEN_SPEED, TOKEN_STRENGTH});
+        if (!tt)
+            return;
+        t->host().gain_token(*tt, +1);
+    }
+
+    c.self().inc_trait(TRAIT_CURSEPROOF, +1);
+    c.self().inc_trait_after(TRAIT_CURSEPROOF, -1, TRIGGER_TURN_START, 1);
+}
+
+
+// Range 2-3. Pull a unit in range 2 spaces. Effect (3+): Pull another unit. (5+): Pull another unit.
+void frenzy_chain(combat &c)
+{
+    list<unit *> us = c.self().units_in_range(2, 3);
+    if (us.empty())
+        return c.no_target();
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    u->pull(c.self(), 2);
+    us.remove(u);
+
+    int d6 = c.player_roll_d6(c.self());
+    if (d6 >= 3 && !us.empty()) {
+        u = c.player_must_select_unit(us);
+        if (!u)
+            return;
+        u->pull(c.self(), 2);
+        us.remove(u);
+    }
+    if (d6 >= 5 && !us.empty()) {
+        u = c.player_must_select_unit(us);
+        if (!u)
+            return;
+        u->pull(c.self(), 2);
+        us.remove(u);
+    }
+}
+
+
+// Self. Destroy adjacent walls. Then, self and two other adjacent units may step 1 and gain 1 speed.
+void furious_roar(combat &c)
+{
+    list<map_space *> walls = c.self().spaces_in_range(1, 1, SELECT_SPACE_WALLS);
+    for (map_space *wall : walls)
+        wall->set_wall(false);
+
+    list<unit *> us = c.self().units_in_range(1, 1, SELECT_UNIT_NO_FOE);
+    us = c.player_must_select_units(us, 0, 2);
+    us.push_front(&c.self());
+
+    for (unit *u : us) {
+        c.unit_step(*u, 1);
+        u->gain_token(TOKEN_SPEED, 1);
+    }
+}
+
+
+// Self. Gain 1 strength and 1 berserk, then double all berserk and strength tokens.
+void apoplexy(combat &c)
+{
+    c.self().gain_token(TOKEN_STRENGTH, 1);
+    c.self().gain_token(TOKEN_BERSERK, 1);
+    c.self().gain_token(TOKEN_BERSERK, c.self().find_token(TOKEN_BERSERK)->count());
+    c.self().gain_token(TOKEN_STRENGTH, c.self().find_token(TOKEN_STRENGTH)->count());
+}
+
+
+// Attack, melee. On hit: 2 damage, then 1 fire damage again. Effect: This attack rolls -1D.
+void pilebunker(combat &c)
+{
+    list<unit *> us = c.self().units_in_range(1, 1);
+    if (us.empty())
+        return c.no_target();
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    int d6 = c.player_roll_d6(c.self(), ROLL_TAG_ATTACK, -1);
+    if (!c.is_hit(*u, d6))
+        return u->take_damage(1, enum_or(DAMAGE_GRAZE, DAMAGE_PHYSICAL), &c.self());
+
+    u->take_damage(2, DAMAGE_PHYSICAL, &c.self());
+    if (!c.then())
+        return;
+    u->take_damage(1, DAMAGE_FIRE, &c.self());
+}
+
+
+// Line 4. Line: 1 damage. If only one unit is caught in the area, increase this damage to 2 instead and this line passes through and destroys walls.
+void saw_toothed_slayer_axe(combat &c)
+{
+    list<map_space *> ss;
+    list<unit *> us = c.player_must_select_line(4, &ss);
+    if (us.empty())
+        return;
+
+    bool single = us.size() == 1;
+    int damage = single ? 2 : 1;
+    for (unit *u : us)
+        u->take_damage(damage, DAMAGE_PHYSICAL, &c.self());
+
+    if (single) {
+        for (map_space *s : ss)
+            s->set_wall(false);
+    }
+}
+
+
+// Attack, melee. On hit: 1 fire damage. Effect: Increase this damage by +1 on hit for every 3 HP this unit is missing. If this unit is at 0 HP, this damage obliterates its target if it slays them.
+void spine_devil_blade(combat &c)
+{
+    list<unit *> us = c.self().units_in_range(1, 1);
+    if (us.empty())
+        return c.no_target();
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    int d6 = c.player_roll_d6(c.self(), ROLL_TAG_ATTACK);
+    if (!c.is_hit(*u, d6))
+        return u->take_damage(1, enum_or(DAMAGE_GRAZE, DAMAGE_FIRE), &c.self());
+
+    int missing_hp = c.self().max_hp() - c.self().hp();
+    int dmg = 1 + missing_hp / 3;
+    damage_type t = (c.self().hp() == 0) ? enum_or(DAMAGE_FIRE, DAMAGE_OBLITERATE_ON_SLAY) : DAMAGE_FIRE;
+    u->take_damage(dmg, t, &c.self());
+}
+
+
+// Ignite (1 SOUL) Own or allied turn. Range 1-3: Deal 1 piercing fire damage to self or a unit in range. That damage cannot slay them. Unit gains 1 berserk and 1 speed.
+void ignite(combat &c)
+{
+    if (!c.player_may_spend_soul(1))
+        return c.no_resources();
+
+    list<unit *> us = c.self().units_in_range(0, 3);
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    u->take_damage(1, enum_or(DAMAGE_FIRE, DAMAGE_PIERCING, DAMAGE_CANT_SLAY), &c.self());
+    u->gain_token(TOKEN_BERSERK, 1);
+    u->gain_token(TOKEN_SPEED, 1);
+}
+
+
+// (3 SOUL) Own or allied turn. Effect: Obliterate an adjacent unit at 1 HP or lower. Gain 2 strength, then step 2.
+void glory_kill(combat &c)
+{
+    list<unit *> us = c.self().units_in_range(1, 1, SELECT_UNIT_WITH_HP_1_OR_LOWER);
+    if (us.empty())
+        return c.no_target();
+
+    if (!c.player_may_spend_soul(3))
+        return c.no_resources();
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    c.obliterate(*u);
+    c.self().gain_token(TOKEN_STRENGTH, 2);
+    c.unit_step(c.self(), 2);
+}
+
+
+// (1 SOUL) Own or allied turn. Effect: MOVE with free movement, then deal 1 fire damage to an adjacent foe.
+void hellrider_kick(combat &c)
+{
+    if (!c.player_may_spend_soul(1))
+        return c.no_resources();
+
+    c.unit_move_again(c.self(), MOVEMENT_FREE);
+
+    list<unit *> us = c.self().units_in_range(1, 1, SELECT_UNIT_NO_ALLY);
+    if (us.empty())
+        return;
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    u->take_damage(1, DAMAGE_FIRE, &c.self());
+}
+
+
+// (1 SOUL) Own or allied turn, range 3. Effect: Self or unit in range gains 2 speed. If the unit is at 1 HP or lower, splash (target): 1 fire damage.
+void overclock(combat &c)
+{
+    if (!c.player_may_spend_soul(1))
+        return c.no_resources();
+
+    list<unit *> us = c.self().units_in_range(0, 3);
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    u->gain_token(TOKEN_SPEED, 2);
+    if (u->hp() <= 1) {
+        list<unit *> splash = u->units_in_range(1, 1);
+        for (unit *u : splash)
+            u->take_damage(1, DAMAGE_FIRE, &c.self());
+    }
+}
+
+
+// (2 SOUL) Any turn. Trigger: You slay a unit. Effect: Step 1. All allied units anywhere may step 1.
+void gorebather(combat &c)
+{
+    if (!c.player_may_spend_soul(2))
+        return c.no_resources();
+
+    c.unit_step(c.self());
+
+    list<unit *> us = c.self().units_in_range(1, 999, enum_or(SELECT_UNIT_IGNORE_LINE_OF_SIGHT, SELECT_UNIT_ALLY));
+    us = c.player_must_select_units(us, 0, (int)us.size());
+    for (unit *u : us)
+        c.unit_step(*u, 1);
+}
+
+
+// (3 SOUL) Any turn. Trigger: After a unit ACTs. Effect: Step 1, then deal 1 damage to an adjacent unit, ignoring armor. Speed can be spent to extend this step by +2. If that unit is slain, repeat this effect. It can repeat any number of times.
+void killing_spree(combat &c)
+{
+    if (!c.player_may_spend_soul(3))
+        return c.no_resources();
+
+    while (true) {
+        c.unit_step(c.self(), 1, MOVEMENT_STEP_CAN_SPEND_SPEED);
+
+        list<unit *> us = c.self().units_in_range(1, 1, SELECT_UNIT_NO_ALLY);
+        if (us.empty())
+            break;
+
+        unit *u = c.player_must_select_unit(us);
+        if (!u)
+            return;
+
+        u->take_damage(1, enum_or(DAMAGE_PHYSICAL, DAMAGE_PIERCING), &c.self());
+        if (!u->is_slain())
+            break;
+    }
+}
+
+
+// (4 SOUL) Any turn. Trigger: Unit is slain. Effect: Unit is not slain but remains at 0 HP and becomes immune to all damage. At the end of its next turn, it explodes, obliterating it, and dealing splash (self): 1 fire damage.
+void blood_boil(combat &c)
+{
+    if (!c.player_may_spend_soul(4))
+        return c.no_resources();
+
+    unit &u = c.activated();
+
+    u.set_hp(0);
+    u.set_slain(false);
+
+    u.inc_trait(TRAIT_IMMUNE_TO_ALL_DAMAGE, +1);
+    u.inc_trait_after(TRAIT_IMMUNE_TO_ALL_DAMAGE, -1, TRIGGER_TURN_END, 1);
+
+    auto explode = [](combat &c) {
+        c.obliterate(c.self());
+        for (unit *u : c.self().units_in_range(1, 1))
+            u->take_damage(1, DAMAGE_FIRE, &c.self());
+    };
+    u.do_after(explode, TRIGGER_TURN_END, 1);
+}
+
+
+// (6 SOUL) Own turn. Deal 6 devil damage to an adjacent unit. Then deal 6 devil damage to yourself.
+void devil_impact(combat &c)
+{
+    list<unit *> us = c.self().units_in_range(1, 1);
+    if (us.empty())
+        return c.no_target();
+
+    if (!c.player_may_spend_soul(6))
+        return c.no_resources();
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    u->take_damage(6, DAMAGE_DEVIL, &c.self());
+    c.self().take_damage(6, DAMAGE_DEVIL, &c.self());
+}
+
+
+// // Blessed with Filth: Immune to hazards. At turn start, gain 1 plague, then distribute any number of plague tokens on this unit to any other units in range 2.
+// void blessed_with_filth(combat &c)
+// {
+//     c.self().inc_trait(TRAIT_IMMUNE_TO_HAZARDS, +1);
+//     c.self().gain_token(TOKEN_PLAGUE, 1);
+
+//     list<unit *> units_in_range = c.self().units_in_range(1, 2);
+//     if (units_in_range.empty()) return;
+
+//     optional<int> tokens_to_distribute = c.player_must_select_token_count(c.self().n_tokens(SELECT_TOKEN_PLAGUE));
+//     if (!tokens_to_distribute) return;
+
+//     for (int i = 0; i < *tokens_to_distribute; ++i) {
+//         unit *target = c.player_must_select_unit(units_in_range);
+//         if (!target) return;
+
+//         c.self().remove_token(TOKEN_PLAGUE, 1);
+//         target->gain_token(TOKEN_PLAGUE, 1);
+//     }
+// }
+
+// // Pollution Shroud: While standing in a hazard, you have cover from all directions and are curseproof.
+// void pollution_shroud(combat &c) {
+//     bool in_hazard = c.self().space()->is_hazard();
+//     bool has_trait = c.self().trait(TRAIT_POLLUTION_SHROUD);
+
+//     if (in_hazard == has_trait) return;
+
+//     if (in_hazard) {
+//         c.self().inc_trait(TRAIT_POLLUTION_SHROUD, 1);
+//         c.self().inc_trait(TRAIT_CURSEPROOF, 1);
+//         c.self().inc_trait(TRAIT_HAS_COVER_FROM_ALL_DIRECTIONS, 1);
+//     } else {
+//         c.self().inc_trait(TRAIT_POLLUTION_SHROUD, -1);
+//         c.self().inc_trait(TRAIT_CURSEPROOF, -1);
+//         c.self().inc_trait(TRAIT_HAS_COVER_FROM_ALL_DIRECTIONS, -1);
+//     }
+// }
+
+// // Corruptor: After you MOVE, create a hazard in an adjacent space.
+// void corruptor(combat &c) {
+//     if (c.trigger() != TRIGGER_AFTER_MOVE) return;
+
+//     map_space *space = c.player_must_select_space(c.self().space(), 1, SELECT_SPACE_FREE);
+//     if (!space) return;
+
+//     space->set_hazard(true);
+// }
+
+// // Spreader: Infect abilities that you use or that target you may jump an extra time.
+// void spreader(combat &c) {
+//     c.self().inc_trait(TRAIT_INFECT_JUMP_EXTRA, 1);
+// }
+
+// // Virulence: Attack, Range 1-3.
+// // On hit: 1 damage and inflict 1 plague. Effect: Then, may immediately remove a plague token on a target to deal 1 toxic damage, again (3+) one more, (5+) one more.
+// void virulence(combat &c) {
+//     list<unit *> targets = c.self().units_in_range(1, 3);
+//     if (targets.empty()) return c.no_target();
+
+//     unit *target = c.player_must_select_unit(targets);
+//     if (!target) return;
+
+//     int d6 = c.player_roll_d6(c.self(), ROLL_TAG_ATTACK);
+//     if (!c.is_hit(*target, d6)) {
+//         target->take_damage(1, enum_or(DAMAGE_GRAZE, DAMAGE_PHYSICAL), &c.self());
+//         return;
+//     }
+
+//     target->take_damage(1, DAMAGE_PHYSICAL, &c.self());
+//     target->gain_token(TOKEN_PLAGUE, 1);
+
+//     int extra_hits = c.d6_gradations(d6, {{3, 1}, {5, 2}});
+//     for (int i = 0; i < extra_hits; ++i) {
+//         token *plague_token = target->find_token(TOKEN_PLAGUE);
+//         if (!plague_token) break;
+
+//         target->remove_token(TOKEN_PLAGUE, 1);
+//         target->take_damage(1, DAMAGE_TOXIC, &c.self());
+//     }
+// }
+
+// // Melt: Curse, Range 1-3.
+// // Effect: Unit takes 1 toxic damage, ignoring armor. If this reduces it to 0 HP, it is obliterated and it melts, creating a hazard in its space.
+// void melt(combat &c) {
+//     list<unit *> targets = c.self().units_in_range(1, 3);
+//     if (targets.empty()) return c.no_target();
+
+//     unit *target = c.player_must_select_unit(targets);
+//     if (!target) return;
+
+//     target->take_damage(1, enum_or(DAMAGE_TOXIC, DAMAGE_IGNORE_ARMOR), &c.self());
+//     if (!target->is_slain()) return;
+
+//     target->space()->set_hazard(true);
+//     c.obliterate(*target);
+// }
+
+// // Corpse Explosion: Range 1-4, Corpse.
+// // Effect: Choose a corpse in range. It explodes for a splash effect centered on it for 1 plague and push 1. Then remove it and replace it with a hazard.
+// void corpse_explosion(combat &c) {
+//     map_space *corpse_space = c.player_must_select_space(c.self().space(), 1, 4, SELECT_SPACE_CORPSE);
+//     if (!corpse_space) return;
+
+//     list<unit *> affected_units = c.units_in_range(*corpse_space, 1, 1);
+//     for (unit *u : affected_units) {
+//         u->gain_token(TOKEN_PLAGUE, 1);
+//         u->push(c.self(), 1);
+//     }
+
+//     corpse_space->set_hazard(true);
+//     c.inc_corpse(*corpse_space, -1);
+// }
+
+// // Vermin Form: Range 2-6, Corpse.
+// // Choose a corpse or a hazard in range and swap places with it. You push all adjacent units 1 and become curseproof until the end of your next turn.
+// void vermin_form(combat &c) {
+//     map_space *target_space = c.player_must_select_space(c.self().space(), 2, 6, enum_or(SELECT_SPACE_CORPSE, SELECT_SPACE_HAZARD));
+//     if (!target_space) return;
+
+//     c.swap_unit_pos(c.self(), *target_space);
+
+//     list<unit *> adjacent_units = c.units_in_range(*target_space, 1, 1);
+//     for (unit *u : adjacent_units) {
+//         u->push(c.self(), 1);
+//     }
+
+//     c.self().set_trait(TRAIT_CURSEPROOF, 2);
+// }
+
+// // (2 SOUL) Effect: 1 plague (6+) or 2 plague. Already plagued foes take 1 toxic damage. Pull all affected units 1.
+// void plague_effect(combat &c) {
+//     if (!c.player_may_spend_soul(2)) return c.no_resources();
+
+//     list<unit *> targets = c.self().units_in_range(1, 3, SELECT_UNIT_NO_ALLY);
+//     if (targets.empty()) return c.no_target();
+
+//     int d6 = c.player_roll_d6(c.self());
+//     int plague_tokens = (d6 >= 6) ? 2 : 1;
+
+//     for (unit *target : targets) {
+//         target->gain_token(TOKEN_PLAGUE, plague_tokens);
+//         if (target->find_token(TOKEN_PLAGUE)) {
+//             target->take_damage(1, DAMAGE_TOXIC, &c.self());
+//         }
+//         target->pull(c.self(), 1);
+//     }
+// }
+
+// // (1 SOUL) On hit: 1 damage and Infect: 1 plague to foes and 1 strength to self or allied units. Double this effect if it slays a foe.
+// void flesh_feeder_blade(combat &c) {
+//     if (!c.player_may_spend_soul(1)) return c.no_resources();
+
+//     list<unit *> targets = c.self().units_in_range(1, 1);
+//     if (targets.empty()) return c.no_target();
+
+//     unit *target = c.player_must_select_unit(targets);
+//     if (!target) return;
+
+//     int d6 = c.player_roll_d6(c.self(), ROLL_TAG_ATTACK);
+//     if (!c.is_hit(*target, d6)) {
+//         target->take_damage(1, enum_or(DAMAGE_GRAZE, DAMAGE_PHYSICAL), &c.self());
+//         return;
+//     }
+
+//     target->take_damage(1, DAMAGE_PHYSICAL, &c.self());
+//     target->gain_token(TOKEN_PLAGUE, 1);
+//     c.self().gain_token(TOKEN_STRENGTH, 1);
+
+//     if (target->is_slain()) {
+//         target->gain_token(TOKEN_PLAGUE, 1);
+//         c.self().gain_token(TOKEN_STRENGTH, 1);
+//     }
+// }
+
+// // (3 SOUL) On hit: 1 damage and create a hazard under target (3+) and slow them (5+) twice.
+// void scourge(combat &c) {
+//     if (!c.player_may_spend_soul(3)) return c.no_resources();
+
+//     list<unit *> targets = c.self().units_in_range(2, 4);
+//     if (targets.empty()) return c.no_target();
+
+//     unit *target = c.player_must_select_unit(targets);
+//     if (!target) return;
+
+//     int d6 = c.player_roll_d6(c.self(), ROLL_TAG_ATTACK);
+//     if (!c.is_hit(*target, d6)) {
+//         target->take_damage(1, enum_or(DAMAGE_GRAZE, DAMAGE_PHYSICAL), &c.self());
+//         return;
+//     }
+
+//     target->take_damage(1, DAMAGE_PHYSICAL, &c.self());
+//     target->space()->set_hazard(true);
+
+//     if (d6 >= 3) target->gain_token(TOKEN_SLOW, 1);
+//     if (d6 >= 5) target->gain_token(TOKEN_SLOW, 1);
+// }
+
+// // (1 SOUL) Curse, Any turn, Range 1-3. Trigger: Turn start. Effect: Grant 2 plague tokens to a unit in range.
+// void infest(combat &c) {
+//     if (!c.player_may_spend_soul(1)) return c.no_resources();
+
+//     list<unit *> targets = c.self().units_in_range(1, 3);
+//     if (targets.empty()) return c.no_target();
+
+//     unit *target = c.player_must_select_unit(targets);
+//     if (!target) return;
+
+//     target->gain_token(TOKEN_PLAGUE, 2);
+// }
+
+// // (3 SOUL) Any Turn. Trigger: Turn start. Effect: MOVE with free movement. Can pass through walls and units during this movement. After the movement finishes, push or pull all units in range 2 one space (5+) two spaces.
+// void slime_form(combat &c) {
+//     if (!c.player_may_spend_soul(3)) return c.no_resources();
+
+//     c.unit_move(c.self(), enum_or(MOVEMENT_FREE, MOVEMENT_THROUGH_WALLS, MOVEMENT_THROUGH_UNITS));
+
+//     list<unit *> targets = c.self().units_in_range(1, 2);
+//     if (targets.empty()) return;
+
+//     int d6 = c.player_roll_d6(c.self());
+//     int spaces = (d6 >= 5) ? 2 : 1;
+
+//     for (unit *target : targets) {
+//         target->push(c.self(), spaces);
+//     }
+// }
+
+// // (1 SOUL) Self or Allied turn, Range 1-3. Remove up to three plague tokens from self or allied unit and grant them to any other adjacent unit to target, then remove a negative token for each plague token removed.
+// void purge_guts(combat &c) {
+//     if (!c.player_may_spend_soul(1)) return c.no_resources();
+
+//     list<unit *> targets = c.self().units_in_range(1, 3, SELECT_UNIT_NO_FOE);
+//     if (targets.empty()) return c.no_target();
+
+//     unit *target = c.player_must_select_unit(targets);
+//     if (!target) return;
+
+//     int plague_tokens = min(3, target->n_tokens(SELECT_TOKEN_PLAGUE));
+//     for (int i = 0; i < plague_tokens; ++i) {
+//         token *plague = target->find_token(TOKEN_PLAGUE);
+//         if (!plague) break;
+
+//         target->remove_token(plague->type(), 1);
+
+//         list<unit *> adjacent_units = target->units_in_range(1, SELECT_UNIT_NO_SELF);
+//         if (adjacent_units.empty()) continue;
+
+//         unit *adjacent_target = c.player_must_select_unit(adjacent_units);
+//         if (!adjacent_target) continue;
+
+//         adjacent_target->gain_token(TOKEN_PLAGUE, 1);
+//     }
+
+//     for (int i = 0; i < plague_tokens; ++i) {
+//         token *negative = target->find_token(SELECT_TOKEN_NEGATIVE);
+//         if (!negative) break;
+
+//         target->remove_token(negative->type(), 1);
+//     }
+// }
+
+// // (1 SOUL) Curse, Any turn, Range 1-3. Trigger: Turn start. Unit gains 1 slow and creates a hazard under themselves at the end of this turn.
+// void insides_out(combat &c) {
+//     if (!c.player_may_spend_soul(1)) return c.no_resources();
+
+//     list<unit *> targets = c.self().units_in_range(1, 3);
+//     if (targets.empty()) return c.no_target();
+
+//     unit *target = c.player_must_select_unit(targets);
+//     if (!target) return;
+
+//     target->gain_token(TOKEN_SLOW, 1);
+//     target->set_trait(TRAIT_CREATE_HAZARD_ON_TURN_END, 1);
+// }
+
+// // (2 SOUL) Any turn, Range 1-3. Trigger: Turn start. Double all plague tokens on a unit. If this puts them at 5 or more tokens, they also explode with splash (target): 1 toxic damage.
+// void fecundity(combat &c) {
+//     if (!c.player_may_spend_soul(2)) return c.no_resources();
+
+//     list<unit *> targets = c.self().units_in_range(1, 3, SELECT_UNIT_WITH_PLAGUE_TOKENS);
+//     if (targets.empty()) return c.no_target();
+
+//     unit *target = c.player_must_select_unit(targets);
+//     if (!target) return;
+
+//     int plague_tokens = target->n_tokens(SELECT_TOKEN_PLAGUE);
+//     target->gain_token(TOKEN_PLAGUE, plague_tokens);
+
+//     if (target->n_tokens(SELECT_TOKEN_PLAGUE) >= 5) {
+//         list<unit *> splash_targets = target->units_in_range(1, SELECT_UNIT_NO_SELF);
+//         for (unit *u : splash_targets) {
+//             u->take_damage(1, DAMAGE_TOXIC, &c.self());
+//         }
+//     }
+// }
+
+// // (3 SOUL) Curse, Any turn, Range 1-3. Trigger: Target turn start. At the end of the targeted unit's turn, targeted unit takes 1 piercing toxic damage for every hazard in range 2 of them.
+// void unholy_vapors(combat &c) {
+//     if (!c.player_may_spend_soul(3)) return c.no_resources();
+
+//     list<unit *> targets = c.self().units_in_range(1, 3);
+//     if (targets.empty()) return c.no_target();
+
+//     unit *target = c.player_must_select_unit(targets);
+//     if (!target) return;
+
+//     target->set_trait(TRAIT_UNHOLY_VAPORS, 1);
+// }
+
+// // (4 SOUL) Own turn, Range 1-2. Place one hazard in range for every other hazard in range.
+// void praise_the_filth(combat &c) {
+//     if (!c.player_may_spend_soul(4)) return c.no_resources();
+
+//     list<map_space *> hazards = c.self().spaces_in_range(1, 2, SELECT_SPACE_HAZARD);
+//     int hazard_count = hazards.size();
+
+//     for (int i = 0; i < hazard_count; ++i) {
+//         map_space *space = c.player_must_select_space(c.self().space(), 1, 2, SELECT_SPACE_FREE);
+//         if (!space) break;
+
+//         space->set_hazard(true);
+//     }
+// }
+
+// // (6 SOUL) Own turn. Remove up to four corpse tokens or hazards and summon a SCUM unit for each. Then splash (target) on all scum created this way for 1 toxic damage to foes. Characters can only be damaged once by this effect.
+// void mox_populi(combat &c) {
+//     if (!c.player_may_spend_soul(6)) return c.no_resources();
+
+//     list<map_space *> spaces = c.self().spaces_in_range(1, 4, enum_or(SELECT_SPACE_CORPSE, SELECT_SPACE_HAZARD));
+//     if (spaces.empty()) return c.no_target();
+
+//     optional<int> remove_count = c.player_must_select_corpse_count(min(4, (int)spaces.size()));
+//     if (!remove_count) return;
+
+//     for (int i = 0; i < *remove_count; ++i) {
+//         map_space *space = c.player_must_select_space(c.self().space(), 1, 4, enum_or(SELECT_SPACE_CORPSE, SELECT_SPACE_HAZARD));
+//         if (!space) break;
+
+//         space->set_hazard(false);
+//         c.inc_corpse(*space, -1);
+//         c.summon_unit(UNIT_SCUM, *space);
+//     }
+
+//     list<unit *> scum_units = c.self().units_in_range(1, 4, SELECT_UNIT_SCUM);
+//     for (unit *scum : scum_units) {
+//         list<unit *> splash_targets = scum->units_in_range(1, SELECT_UNIT_NO_SELF);
+//         for (unit *u : splash_targets) {
+//             u->take_damage(1, DAMAGE_TOXIC, &c.self());
+//         }
+//     }
+// }
+
+// // Fueled by Rage: Gain 1 berserk token at the start of your turn. You may spend berserk tokens as speed tokens and vice versa.
+// void fueled_by_rage(combat &c) {
+//     c.self().gain_token(TOKEN_BERSERK, 1);
+//     c.self().may_treat_token_a_as_b(TOKEN_BERSERK, TOKEN_SPEED);
+// }
+
+// // Nerve Twitch: At 3 HP or lower, DF increases to 5+.
+// void nerve_twitch(combat &c) {
+//     if (c.self().hp() <= 3) {
+//         c.self().set_trait(TRAIT_ALTERED_DF, 5);
+//     }
+// }
+
+// // Blood Drinker: Slaying a unit clears two negative tokens.
+// void blood_drinker(combat &c) {
+//     if (c.trigger() == TRIGGER_AFTER_SLAY) {
+//         list<token *> negative_tokens = c.self().tokens(SELECT_TOKEN_NEGATIVE);
+//         for (int i = 0; i < 2 && !negative_tokens.empty(); ++i) {
+//             token *t = negative_tokens.front();
+//             c.self().remove_token(t->type(), 1);
+//             negative_tokens.pop_front();
+//         }
+//     }
+// }
+
+// // Blood Rush: At 3 HP or lower, gain retaliation.
+// void blood_rush(combat &c) {
+//     if (c.self().hp() <= 3) {
+//         c.self().inc_trait(TRAIT_RETALIATION, 1);
+//     }
+// }
+
+// // Superheated Chainblade: Attack, melee.
+// // On hit: 1 damage, Effect: (4+): 1 fire damage again, (6+): 1 fire damage again.
+// void superheated_chainblade(combat &c) {
+//     list<unit *> targets = c.self().units_in_range(1, 1);
+//     if (targets.empty()) return c.no_target();
+
+//     unit *target = c.player_must_select_unit(targets);
+//     if (!target) return;
+
+//     int d6 = c.player_roll_d6(c.self(), ROLL_TAG_ATTACK);
+//     if (!c.is_hit(*target, d6)) {
+//         target->take_damage(1, enum_or(DAMAGE_GRAZE, DAMAGE_PHYSICAL), &c.self());
+//         return;
+//     }
+
+//     target->take_damage(1, DAMAGE_PHYSICAL, &c.self());
+//     if (d6 >= 4) target->take_damage(1, DAMAGE_FIRE, &c.self());
+//     if (d6 >= 6) target->take_damage(1, DAMAGE_FIRE, &c.self());
+// }
+
+// // Quench: Self.
+// // Effect: Convert up to 3 negative tokens on self or adjacent allies to speed or strength tokens. Then this unit becomes curseproof until the start of its next turn.
+// void quench(combat &c) {
+//     list<unit *> units = c.self().units_in_range(1, SELECT_UNIT_NO_FOE);
+//     units.push_front(&c.self());
+
+//     int converted = 0;
+//     for (unit *u : units) {
+//         list<token *> negative_tokens = u->tokens(SELECT_TOKEN_NEGATIVE);
+//         while (!negative_tokens.empty() && converted < 3) {
+//             token *t = negative_tokens.front();
+//             u->remove_token(t->type(), 1);
+//             c.self().gain_token(c.player_must_select_token_type({TOKEN_SPEED, TOKEN_STRENGTH}), 1);
+//             negative_tokens.pop_front();
+//             ++converted;
+//         }
+//     }
+
+//     c.self().set_trait(TRAIT_CURSEPROOF, 2);
+// }
+
+// // Frenzy Chain: Range 2-3.
+// // Pull a unit in range 2 spaces. Effect (3+): Pull another unit. (5+): Pull another unit.
+// void frenzy_chain(combat &c) {
+//     list<unit *> targets = c.self().units_in_range(2, 3);
+//     if (targets.empty()) return c.no_target();
+
+//     unit *target = c.player_must_select_unit(targets);
+//     if (!target) return;
+
+//     target->pull(c.self(), 2);
+
+//     int d6 = c.player_roll_d6(c.self());
+//     if (d6 >= 3) {
+//         targets.remove(target);
+//         if (!targets.empty()) {
+//             unit *second_target = c.player_must_select_unit(targets);
+//             if (second_target) second_target->pull(c.self(), 2);
+//         }
+//     }
+//     if (d6 >= 5) {
+//         targets.remove(target);
+//         if (!targets.empty()) {
+//             unit *third_target = c.player_must_select_unit(targets);
+//             if (third_target) third_target->pull(c.self(), 2);
+//         }
+//     }
+// }
+
+// // Furious Roar: Self.
+// // Destroy adjacent walls. Then, self and two other adjacent units may step 1 and gain 1 speed.
+// void furious_roar(combat &c) {
+//     list<map_space *> walls = c.self().spaces_in_range(1, 1, SELECT_SPACE_WALLS);
+//     for (map_space *wall : walls) {
+//         wall->set_wall(false);
+//     }
+
+//     list<unit *> units = c.self().units_in_range(1, SELECT_UNIT_NO_FOE);
+//     units.push_front(&c.self());
+
+//     int steps = 0;
+//     for (unit *u : units) {
+//         if (steps >= 3) break;
+//         c.unit_step(*u, 1);
+//         u->gain_token(TOKEN_SPEED, 1);
+//         ++steps;
+//     }
+// }
+
+// // ...existing code...
+
+// // (1 SOUL) Own or Allied turn. Range 2-3. Trigger: Start of turn. Create a wall in range and inflict 1 weak on adjacent foes to the wall.
+// void cyclopean_monolith(combat &c) {
+//     if (!c.player_may_spend_soul(1)) return c.no_resources();
+//     map_space *p = c.player_must_select_space(c.self().space(), 2, 3, enum_or(SELECT_SPACE_UNIT, SELECT_SPACE_NO_WALLS));
+//     if (!p) return;
+//     p->set_wall(true);
+//     for (unit *u : c.units_in_range(*p, 1, 1))
+//         if (!u->is_ally(c.self()))
+//             u->gain_token(TOKEN_WEAK, 1);
+// }
+
+// // (3 SOUL) Self or Allied Turn. Range 1-2. All isolated or doomed foes in range take 1 curse damage, gain 1 weak, and this unit gains 1 strength per such foe.
+// void soulfeed(combat &c) {
+//     if (!c.player_may_spend_soul(3)) return c.no_resources();
+//     list<unit *> foes = c.self().units_in_range(1, 2, SELECT_UNIT_NO_ALLY);
+//     int gained = 0;
+//     for (unit *u : foes) {
+//         bool cond = u->is_isolated() || u->find_token(TOKEN_DOOM);
+//         if (!cond) continue;
+//         u->take_damage(1, DAMAGE_CURSE, &c.self());
+//         u->gain_token(TOKEN_WEAK, 1);
+//         ++gained;
+//     }
+//     if (gained) c.self().gain_token(TOKEN_STRENGTH, gained);
+// }
+
+// // (1 SOUL) Curse, Any turn, Range 2-4. Trigger: Start of turn. Pull unit 1 in any direction.
+// void twist_sinews(combat &c) {
+//     if (!c.player_may_spend_soul(1)) return c.no_resources();
+//     list<unit *> us = c.self().units_in_range(2, 4);
+//     if (us.empty()) return c.no_target();
+//     unit *u = c.player_must_select_unit(us);
+//     if (!u) return;
+//     u->pull(c.self(), 1);
+// }
+
+// // (1 SOUL) Foe turn, Curse, Range 1-4. Trigger: Turn start. At the end of their turn, foe inflicts splash(self) 1 curse damage and 1 weak, only affecting their allies.
+// void writhing_curse(combat &c) {
+//     if (!c.player_may_spend_soul(1)) return c.no_resources();
+//     list<unit *> us = c.self().units_in_range(1, 4, SELECT_UNIT_FOE);
+//     if (us.empty()) return c.no_target();
+//     unit *u = c.player_must_select_unit(us);
+//     if (!u) return;
+//     u->set_trait(TRAIT_UNHOLY_VAPORS, 1);
+// }
+
+// // (2 SOUL) Own or allied turn. Range 1-4. Remove self and an adjacent allied unit, then place self in a free space in range 3, then place ally adjacent. If there is no room to place allies, return them at their original location.
+// void disincorporate(combat &c) {
+//     if (!c.player_may_spend_soul(2)) return c.no_resources();
+//     list<unit *> allies = c.self().units_in_range(1, 1, SELECT_UNIT_ALLY);
+//     if (allies.empty()) return c.no_target();
+//     unit *ally = c.player_must_select_unit(allies);
+//     if (!ally) return;
+//     map_space *dest_self = c.player_must_select_space(c.self().space(), 3, SELECT_SPACE_FREE);
+//     if (!dest_self) return;
+//     map_space *adj = c.player_must_select_space(dest_self, 1, SELECT_SPACE_FREE);
+//     if (!adj) return;
+//     c.swap_unit_pos(c.self(), *dest_self);
+//     c.swap_unit_pos(*ally, *adj);
+// }
+
+// // (3 SOUL) Any turn. Trigger: A unit is slain. Transfer all negative tokens to a different unit anywhere, then increase those tokens by 1.
+// void eternal_curse(combat &c) {
+//     if (!c.player_may_spend_soul(3)) return c.no_resources();
+//     unit &slain = c.activated();
+//     list<token *> negs;
+//     for (token *t : slain.tokens())
+//         if (t->is_negative())
+//             negs.push_back(t);
+//     if (negs.empty()) return;
+//     list<unit *> candidates = c.self().units_in_range(1, 100);
+//     candidates.remove(&slain);
+//     if (candidates.empty()) return c.no_target();
+//     unit *target = c.player_must_select_unit(candidates);
+//     if (!target) return;
+//     for (token *t : negs) {
+//         int cnt = t->count();
+//         slain.remove_token(t->type(), cnt);
+//         target->gain_token(t->type(), cnt + 1);
+//     }
+// }
+
+// // (4 SOUL) Own turn. Scour the battlefield with frozen wind, pulling all foes 1 space in the same direction. Foes that would be pulled into walls or adverse terrain take 1 damage.
+// void malebolge(combat &c) {
+//     if (!c.player_may_spend_soul(4)) return c.no_resources();
+//     map_space *dir = c.player_must_select_space(c.self().space(), 1, SELECT_SPACE_ANY);
+//     if (!dir) return;
+//     list<unit *> foes = c.self().units_in_range(1, 100, SELECT_UNIT_NO_ALLY);
+//     for (unit *u : foes) {
+//         u->pull(c.self(), 1);
+//         map_space *s = u->space();
+//         if (s->is_wall() || s->is_adverse_terrain())
+//             u->take_damage(1, DAMAGE_PHYSICAL, &c.self());
+//     }
+// }
+
+// // (6 SOUL) Own turn, Range 1-2. Doom all enemy units in range. All Doomed enemy units instead take 1 curse damage, +1 per Doom token they have.
+// void great_satania(combat &c) {
+//     if (!c.player_may_spend_soul(6)) return c.no_resources();
+//     list<unit *> foes = c.self().units_in_range(1, 2, SELECT_UNIT_NO_ALLY);
+//     if (foes.empty()) return c.no_target();
+//     for (unit *u : foes)
+//         u->gain_token(TOKEN_DOOM, 1);
+//     for (unit *u : foes) {
+//         token *t = u->find_token(TOKEN_DOOM);
+//         int n = t ? t->count() : 0;
+//         u->take_damage(1 + n, DAMAGE_CURSE, &c.self());
+//     }
+// }
+
+// Holy Vessel: Lacks Miracle. However, while alive, miracle triggers for adjacent allies on a 4+, and gain 1 SOUL the first time it triggers in a round.
+// Winter Rose Stance: Stance: (Round 3+): Attacks cannot miss (all misses turn into hits).
+// Corpse Violet Stance: Stance: (Round 3+): Gain either PHYS or MAG armor (choose).
+// Royal Chrysanthemum Stance: Stance (Round 3+): May step 2 after ACTing.
+
+// Starmetal Godsword: Attack, melee.
+// On hit: 1 damage. Stance (Odd): and step 2, Stance (Even): and gain 1 vitality, Stance (Round 5+): Increase damage to 3.
+// Grand Oath: Self.
+// Effect: Splash (self). Self and allies in the area may convert any number of vitality to strength.
+// Redempta: Range 1-4.
+// Effect: Remove all negative tokens on an ally, then transfer to self. That ally gains 1 vitality per negative token removed and becomes curseproof until the start of its next turn.
+// Communion: Self.
+// Effect: Gain 1 vitality. Until end of next turn, self and adjacent allies may spend this unit’s HP as if it were vitality tokens.
+// Decree of Forbiddance: Curse, Self.
+// Effect: Until end of next turn, foes ending their turn in range 2 of this unit have a hazard created under them, then are pushed 1.
+// Holy Water Flail: Attack, Range 2-4, charge.
+// On hit: 1 holy damage and splash (target): 1 holy damage. Stance (Round 3+): and create a hazard under target (round 5+) all targets in the area.
+// Relic Lance: Attack, melee.
+// On hit: 2 damage. Stance: May step spaces equal to the round number with free movement, in a straight line, before the attack. On hit, push target half that many spaces.
+// Starmetal Shuriken: Attack, Range 2-5.
+// On hit: 1 damage. Stance: Roll the effect die. If you roll under the round number, deal 1 holy damage again. If you roll exactly the round number, deal 2 holy damage again instead.
+
+// Absolution (1 SOUL)
+// Any turn, Range 2-6. Trigger: Turn start. Effect: Self takes 1 piercing damage, which cannot slay self. One allied unit in range gains one, (3+) two, or (5+) three vitality.
+// Will of God (3 SOUL)
+// Own or Allied Turn, Range 1-3. Trigger: Turn start. Effect: For this turn only, self or allied unit may treat the current round number as either 2 or 5.
+// Sword Art: Drifting Blossoms (1 SOUL)
+// Any turn. Trigger: A unit MOVEs, and that move resolves. Effect: Stance: Step spaces equal to 1 + the round number, then push an adjacent unit 1.
+// Sword Art: Safflower Cut (2 SOUL)
+// Own or allied turn. Line, Stance: Step 1, then cut a line area with spaces equal to the round number +2, dealing 1 damage to all characters within and pushing those characters 1. Stance (Round 5+): This damage becomes Devil Damage.
+// Grace (2 SOUL)
+// Own or allied turn, Range 1-3. Trigger: Turn start. Effect: Unit becomes curseproof until end of its next turn and attacks against it gain -1D for the duration.
+// Sword Art: Winter Sprout (3 SOUL)
+// Any turn. Trigger: This unit takes damage from an ACT ability, and that ability resolves. Effect: Splash (self): remove 1 negative token on self or gain 1 vitality for every foe in the splash area. Stance (Round 4+): Both effects trigger.
+// Supreme Sword Art: Merciful Snowdrop Cut (4 SOUL)
+// Own Turn. Trigger: You hit an attack. Effect: Splash (self): 1 holy damage. Stance (R3+): 2 holy damage (R5+): 4 holy damage.
+// Resurrection (6 SOUL)
+// Any turn. Trigger: Allied unit is slain. Effect: Return unit to life at 1 HP at the end of the turn. It becomes immune to all damage and curseproog until the start of its next turn. Stance (Round 3+): and it gains 1 vitality (Round 5+) 3 vitality instead.
+
 
 // *** UNITS ***
 void gunwight(unit_card &c)
@@ -4164,6 +5349,15 @@ void operator_necromancer(unit_card &c)
     c.add_upgrade_act_ability(lv4_living_cannon);
     c.add_upgrade_act_ability(sg88_two_barrel_shotgun);
     c.add_upgrade_act_ability(unholy_sixgun);
+
+    c.add_soul_ability(TRIGGER_SOUL_OWN_OR_ALLIED_TURN, reload_slide);
+    c.add_soul_ability(TRIGGER_SOUL_OWN_TURN, bullet_time);
+    c.add_upgrade_soul_ability(enum_or(TRIGGER_SOUL_OWN_TURN, TRIGGER_AFTER_ATTACK_DAMAGED), double_tap);
+    c.add_upgrade_soul_ability(enum_or(TRIGGER_SOUL_OWN_TURN, TRIGGER_AFTER_ATTACK_HITED), frag_bullet);
+    c.add_upgrade_soul_ability(enum_or(TRIGGER_SOUL_ANY_TURN, TRIGGER_AFTER_UNIT_MOVED), bullet_hustle);
+    c.add_upgrade_soul_ability(TRIGGER_SOUL_OWN_TURN, overwatch);
+    c.add_upgrade_soul_ability(TRIGGER_SOUL_OWN_TURN, bullet_sonata);
+    c.add_upgrade_soul_ability(enum_or(TRIGGER_SOUL_OWN_TURN, TRIGGER_AFTER_HEADSHOT), straight_to_the_grave);
 }
 
 
@@ -4277,6 +5471,30 @@ void warlord(unit_card &c)
 {
     c.set_faction_type(FACTION_GOREGRINDERS, UNIT_NECROMANCER);
     c.set_stats(4, 10, 3, ARMOR_NONE);
+
+    c.add_trait(TRIGGER_AFTER_DAMAGED, blood_rage);
+    c.add_trait(TRIGGER_TURN_START, fueled_by_rage);
+    c.add_bonus_trait(TRIGGER_COMBAT_START, nerve_twitch);
+    c.add_bonus_trait(TRIGGER_COMBAT_START, blood_drinker);
+    c.add_bonus_trait(TRIGGER_COMBAT_START, blood_rush);
+
+    c.add_act_ability(superheated_chainblade);
+    c.add_upgrade_act_ability(quench);
+    c.add_upgrade_act_ability(frenzy_chain);
+    c.add_upgrade_act_ability(furious_roar);
+    c.add_upgrade_act_ability(apoplexy);
+    c.add_upgrade_act_ability(pilebunker);
+    c.add_upgrade_act_ability(saw_toothed_slayer_axe);
+    c.add_upgrade_act_ability(spine_devil_blade);
+
+    c.add_soul_ability(TRIGGER_SOUL_OWN_OR_ALLIED_TURN, ignite);
+    c.add_soul_ability(TRIGGER_SOUL_OWN_OR_ALLIED_TURN, glory_kill);
+    c.add_upgrade_soul_ability(TRIGGER_SOUL_OWN_OR_ALLIED_TURN, hellrider_kick);
+    c.add_upgrade_soul_ability(TRIGGER_SOUL_OWN_OR_ALLIED_TURN, overclock);
+    c.add_upgrade_soul_ability(enum_or(TRIGGER_SOUL_ANY_TURN, TRIGGER_AFTER_SLAIN), gorebather);
+    c.add_upgrade_soul_ability(enum_or(TRIGGER_SOUL_ANY_TURN, TRIGGER_AFTER_UNIT_ACTED), killing_spree);
+    c.add_upgrade_soul_ability(enum_or(TRIGGER_SOUL_ANY_TURN, TRIGGER_AFTER_UNIT_SLAINED), blood_boil);
+    c.add_upgrade_soul_ability(TRIGGER_SOUL_OWN_TURN, devil_impact);
 }
 
 
@@ -4873,7 +6091,7 @@ token *unit::find_token(token_type type) const
 int unit::corpses_in_range(int min, int max) const
 {
     int corpses = 0;
-    for (const ::space *s : spaces_in_range(min, max))
+    for (const map_space *s : spaces_in_range(min, max))
         corpses += s->n_corpses();
     return corpses;
 }
