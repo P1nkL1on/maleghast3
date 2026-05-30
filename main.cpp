@@ -56,6 +56,7 @@ enum take_action
     TAKE_ACTION_LABYRINTH_MASTER,
     TAKE_ACTION_STEP,
     TAKE_ACTION_MOVE_AGAIN,
+    TAKE_ACTION_VIRULENCE,
 };
 
 
@@ -203,6 +204,9 @@ enum trait_id
     TRAIT_SMOG_SHROUD,
     // Gains death burst: splash (self): 1 toxic damage and 1 plague. This effect cannot stack with itself but stacks with other death burst effects.
     TRAIT_SUPPURATE,
+    TRAIT_POLLUTION_SHROUD,
+    // Infect abilities that you use or that target you may jump an extra time.
+    TRAIT_INFECT_JUMP_EXTRA,
 
     // When slain, does not remove Doom, and (5+) Dooms slayer.
     TRAIT_INVERTED_CRUCIFIX,
@@ -271,7 +275,8 @@ enum select_space_filter
     SELECT_SPACE_WALLS = 1 << 2,
     SELECT_SPACE_NO_WALLS = 1 << 3,
     SELECT_SPACE_CORPSES = 1 << 4,
-    SELECT_SPACE_NO_LINE_OF_SIGHT = 1 << 5,
+    SELECT_SPACE_HAZARD = 1 << 5,
+    SELECT_SPACE_IGNORE_LINE_OF_SIGHT = 1 << 6,
 
     SELECT_SPACE_FREE = SELECT_SPACE_NO_UNIT | SELECT_SPACE_NO_WALLS,
 };
@@ -314,6 +319,7 @@ enum movement_tags
     MOVEMENT_DESTROY_WALLS,
     MOVEMENT_ABSORB_CORPSES,
     MOVEMENT_THROUGH_FOES,
+    MOVEMENT_THROUGH_WALLS,
     // If pulling a unit into a wall, +2 distance and the kidnapped unit can pass through walls and units during this movement
     MOVEMENT_KIDNAP,
     // automatically added on push/pull
@@ -548,6 +554,7 @@ struct unit;
 struct token;
 struct combat;
 struct player;
+struct unit_card;
 
 
 struct map_space
@@ -586,6 +593,7 @@ struct unit
 
     virtual void teleport(int distance) = 0;
     virtual void push(unit &from, int distance = 1) = 0;
+    virtual void push(map_space &from, int distance = 1) = 0;
     virtual void pull(unit &to, int distance = 1, movement_tags extra_tags = MOVEMENT_DEFAULT) = 0;
 
     // TODO: make void
@@ -695,6 +703,8 @@ struct combat
     virtual int inc_corpse(const map_space &, int x = 0) = 0;
     virtual unit &copy_unit(unit &, const map_space &new_pos) = 0;
     virtual void swap_unit_pos(unit &, unit &) = 0;
+    virtual void swap_unit_pos(unit &, map_space &) = 0;
+    virtual void summon(const map_space &, void(*unit)(unit_card &)) = 0;
 
     // TODO: check how ammo goblin choose what to reload? or does it reload everything?
     // TODO: add TRAIT_HOT_CLIP support
@@ -4416,8 +4426,8 @@ void pilebunker(combat &c)
 // Line 4. Line: 1 damage. If only one unit is caught in the area, increase this damage to 2 instead and this line passes through and destroys walls.
 void saw_toothed_slayer_axe(combat &c)
 {
-    list<map_space *> ss;
-    list<unit *> us = c.player_must_select_line(4, &ss);
+    list<map_space *> ps;
+    list<unit *> us = c.player_must_select_line(4, &ps);
     if (us.empty())
         return;
 
@@ -4427,8 +4437,8 @@ void saw_toothed_slayer_axe(combat &c)
         u->take_damage(damage, DAMAGE_PHYSICAL, &c.self());
 
     if (single) {
-        for (map_space *s : ss)
-            s->set_wall(false);
+        for (map_space *p : ps)
+            p->set_wall(false);
     }
 }
 
@@ -4615,481 +4625,464 @@ void devil_impact(combat &c)
 }
 
 
-// // Blessed with Filth: Immune to hazards. At turn start, gain 1 plague, then distribute any number of plague tokens on this unit to any other units in range 2.
-// void blessed_with_filth(combat &c)
-// {
-//     c.self().inc_trait(TRAIT_IMMUNE_TO_HAZARDS, +1);
-//     c.self().gain_token(TOKEN_PLAGUE, 1);
-
-//     list<unit *> units_in_range = c.self().units_in_range(1, 2);
-//     if (units_in_range.empty()) return;
-
-//     optional<int> tokens_to_distribute = c.player_must_select_token_count(c.self().n_tokens(SELECT_TOKEN_PLAGUE));
-//     if (!tokens_to_distribute) return;
-
-//     for (int i = 0; i < *tokens_to_distribute; ++i) {
-//         unit *target = c.player_must_select_unit(units_in_range);
-//         if (!target) return;
-
-//         c.self().remove_token(TOKEN_PLAGUE, 1);
-//         target->gain_token(TOKEN_PLAGUE, 1);
-//     }
-// }
-
-// // Pollution Shroud: While standing in a hazard, you have cover from all directions and are curseproof.
-// void pollution_shroud(combat &c) {
-//     bool in_hazard = c.self().space()->is_hazard();
-//     bool has_trait = c.self().trait(TRAIT_POLLUTION_SHROUD);
-
-//     if (in_hazard == has_trait) return;
-
-//     if (in_hazard) {
-//         c.self().inc_trait(TRAIT_POLLUTION_SHROUD, 1);
-//         c.self().inc_trait(TRAIT_CURSEPROOF, 1);
-//         c.self().inc_trait(TRAIT_HAS_COVER_FROM_ALL_DIRECTIONS, 1);
-//     } else {
-//         c.self().inc_trait(TRAIT_POLLUTION_SHROUD, -1);
-//         c.self().inc_trait(TRAIT_CURSEPROOF, -1);
-//         c.self().inc_trait(TRAIT_HAS_COVER_FROM_ALL_DIRECTIONS, -1);
-//     }
-// }
-
-// // Corruptor: After you MOVE, create a hazard in an adjacent space.
-// void corruptor(combat &c) {
-//     if (c.trigger() != TRIGGER_AFTER_MOVE) return;
-
-//     map_space *space = c.player_must_select_space(c.self().space(), 1, SELECT_SPACE_FREE);
-//     if (!space) return;
-
-//     space->set_hazard(true);
-// }
-
-// // Spreader: Infect abilities that you use or that target you may jump an extra time.
-// void spreader(combat &c) {
-//     c.self().inc_trait(TRAIT_INFECT_JUMP_EXTRA, 1);
-// }
-
-// // Virulence: Attack, Range 1-3.
-// // On hit: 1 damage and inflict 1 plague. Effect: Then, may immediately remove a plague token on a target to deal 1 toxic damage, again (3+) one more, (5+) one more.
-// void virulence(combat &c) {
-//     list<unit *> targets = c.self().units_in_range(1, 3);
-//     if (targets.empty()) return c.no_target();
-
-//     unit *target = c.player_must_select_unit(targets);
-//     if (!target) return;
-
-//     int d6 = c.player_roll_d6(c.self(), ROLL_TAG_ATTACK);
-//     if (!c.is_hit(*target, d6)) {
-//         target->take_damage(1, enum_or(DAMAGE_GRAZE, DAMAGE_PHYSICAL), &c.self());
-//         return;
-//     }
-
-//     target->take_damage(1, DAMAGE_PHYSICAL, &c.self());
-//     target->gain_token(TOKEN_PLAGUE, 1);
-
-//     int extra_hits = c.d6_gradations(d6, {{3, 1}, {5, 2}});
-//     for (int i = 0; i < extra_hits; ++i) {
-//         token *plague_token = target->find_token(TOKEN_PLAGUE);
-//         if (!plague_token) break;
-
-//         target->remove_token(TOKEN_PLAGUE, 1);
-//         target->take_damage(1, DAMAGE_TOXIC, &c.self());
-//     }
-// }
-
-// // Melt: Curse, Range 1-3.
-// // Effect: Unit takes 1 toxic damage, ignoring armor. If this reduces it to 0 HP, it is obliterated and it melts, creating a hazard in its space.
-// void melt(combat &c) {
-//     list<unit *> targets = c.self().units_in_range(1, 3);
-//     if (targets.empty()) return c.no_target();
-
-//     unit *target = c.player_must_select_unit(targets);
-//     if (!target) return;
-
-//     target->take_damage(1, enum_or(DAMAGE_TOXIC, DAMAGE_IGNORE_ARMOR), &c.self());
-//     if (!target->is_slain()) return;
-
-//     target->space()->set_hazard(true);
-//     c.obliterate(*target);
-// }
-
-// // Corpse Explosion: Range 1-4, Corpse.
-// // Effect: Choose a corpse in range. It explodes for a splash effect centered on it for 1 plague and push 1. Then remove it and replace it with a hazard.
-// void corpse_explosion(combat &c) {
-//     map_space *corpse_space = c.player_must_select_space(c.self().space(), 1, 4, SELECT_SPACE_CORPSE);
-//     if (!corpse_space) return;
-
-//     list<unit *> affected_units = c.units_in_range(*corpse_space, 1, 1);
-//     for (unit *u : affected_units) {
-//         u->gain_token(TOKEN_PLAGUE, 1);
-//         u->push(c.self(), 1);
-//     }
-
-//     corpse_space->set_hazard(true);
-//     c.inc_corpse(*corpse_space, -1);
-// }
-
-// // Vermin Form: Range 2-6, Corpse.
-// // Choose a corpse or a hazard in range and swap places with it. You push all adjacent units 1 and become curseproof until the end of your next turn.
-// void vermin_form(combat &c) {
-//     map_space *target_space = c.player_must_select_space(c.self().space(), 2, 6, enum_or(SELECT_SPACE_CORPSE, SELECT_SPACE_HAZARD));
-//     if (!target_space) return;
-
-//     c.swap_unit_pos(c.self(), *target_space);
-
-//     list<unit *> adjacent_units = c.units_in_range(*target_space, 1, 1);
-//     for (unit *u : adjacent_units) {
-//         u->push(c.self(), 1);
-//     }
-
-//     c.self().set_trait(TRAIT_CURSEPROOF, 2);
-// }
-
-// // (2 SOUL) Effect: 1 plague (6+) or 2 plague. Already plagued foes take 1 toxic damage. Pull all affected units 1.
-// void plague_effect(combat &c) {
-//     if (!c.player_may_spend_soul(2)) return c.no_resources();
-
-//     list<unit *> targets = c.self().units_in_range(1, 3, SELECT_UNIT_NO_ALLY);
-//     if (targets.empty()) return c.no_target();
+//Immune to hazards. At turn start, gain 1 plague, then distribute any number of plague tokens on this unit to any other units in range 2.
+void blessed_with_filth(combat &c)
+{
+    if (c.trigger() == TRIGGER_COMBAT_START) {
+        c.self().inc_trait(TRAIT_IMMUNE_TO_HAZARDS, +1);
+        return;
+    }
+    if (c.trigger() == TRIGGER_TURN_START) {
+        c.self().gain_token(TOKEN_PLAGUE, 1);
+
+        list<unit *> us = c.self().units_in_range(1, 2);
+        if (us.empty())
+            return;
+
+        optional<int> tt = c.player_must_select_token_count(c.self().n_tokens(SELECT_TOKEN_PLAGUE));
+        if (!tt)
+            return;
+
+        int n = *tt;
+        while (n--) {
+            unit *u = c.player_must_select_unit(us);
+            if (!u)
+                return;
+
+            c.self().remove_token(TOKEN_PLAGUE, 1);
+            u->gain_token(TOKEN_PLAGUE, 1);
+        }
+    }
+}
+
+
+//While standing in a hazard, you have cover from all directions and are curseproof.
+void pollution_shroud(combat &c)
+{
+    bool was = c.self().trait(TRAIT_POLLUTION_SHROUD);
+    bool will = c.self().space()->is_hazard();
+    if (will == was)
+        return;
+
+    int inc = will ? +1 : -1;
+    c.self().inc_trait(TRAIT_POLLUTION_SHROUD, inc);
+    c.self().inc_trait(TRAIT_CURSEPROOF, inc);
+    c.self().inc_trait(TRAIT_HAS_COVER_FROM_ALL_DIRECTIONS, inc);
+}
+
+
+//After you MOVE, create a hazard in an adjacent space.
+void corruptor(combat &c)
+{
+    map_space *p = c.player_must_select_space(c.self().space(), 1, SELECT_SPACE_NO_WALLS);
+    if (!p)
+        return;
+
+    p->set_hazard(true);
+}
+
+
+//Infect abilities that you use or that target you may jump an extra time.
+void spreader(combat &c)
+{
+    c.self().inc_trait(TRAIT_INFECT_JUMP_EXTRA, 1);
+}
+
+
+//Attack, Range 1-3. On hit: 1 damage and inflict 1 plague. Effect: Then, may immediately remove a plague token on a target to deal 1 toxic damage, again (3+) one more, (5+) one more.
+void virulence(combat &c)
+{
+    list<unit *> us = c.self().units_in_range(1, 3);
+    if (us.empty())
+        return c.no_target();
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    int d6 = c.player_roll_d6(c.self(), ROLL_TAG_ATTACK);
+    if (!c.is_hit(*u, d6))
+        return u->take_damage(1, enum_or(DAMAGE_GRAZE, DAMAGE_PHYSICAL), &c.self());
+
+    u->take_damage(1, DAMAGE_PHYSICAL, &c.self());
+    u->gain_token(TOKEN_PLAGUE, 1);
+
+    token *t = u->find_token(TOKEN_PLAGUE);
+    if (!t)
+        return;
+
+    if (!c.player_may_take_action(TAKE_ACTION_VIRULENCE))
+        return;
+    d6 = c.player_roll_d6(c.self());
+    int n = c.d6_gradations(d6, {{3, 1}, {5, 2}});
+    while(n--) {
+        u->remove_token(TOKEN_PLAGUE, 1);
+        u->take_damage(1, DAMAGE_TOXIC, &c.self());
+    }
+}
+
+
+// Curse, Range 1-3. Effect: Unit takes 1 toxic damage, ignoring armor. If this reduces it to 0 HP, it is obliterated and it melts, creating a hazard in its space.
+void melt(combat &c)
+{
+    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_NO_CURSEPROOF);
+    if (us.empty())
+        return c.no_target();
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    u->take_damage(1, enum_or(DAMAGE_TOXIC, DAMAGE_PIERCING, DAMAGE_OBLITERATE_ON_SLAY), &c.self());
+    if (!u->is_slain())
+        return;
+
+    u->space()->set_hazard(true);
+}
 
-//     int d6 = c.player_roll_d6(c.self());
-//     int plague_tokens = (d6 >= 6) ? 2 : 1;
 
-//     for (unit *target : targets) {
-//         target->gain_token(TOKEN_PLAGUE, plague_tokens);
-//         if (target->find_token(TOKEN_PLAGUE)) {
-//             target->take_damage(1, DAMAGE_TOXIC, &c.self());
-//         }
-//         target->pull(c.self(), 1);
-//     }
-// }
+// Range 1-4, Corpse. Effect: Choose a corpse in range. It explodes for a splash effect centered on it for 1 plague and push 1. Then remove it and replace it with a hazard.
+void corpse_explosion(combat &c)
+{
+    map_space *p = c.player_must_select_space(c.self().space(), 1, 4, SELECT_SPACE_CORPSES);
+    if (!p)
+        return;
 
-// // (1 SOUL) On hit: 1 damage and Infect: 1 plague to foes and 1 strength to self or allied units. Double this effect if it slays a foe.
-// void flesh_feeder_blade(combat &c) {
-//     if (!c.player_may_spend_soul(1)) return c.no_resources();
+    list<unit *> splash = c.units_in_range(*p, 1, 1);
+    for (unit *u : splash) {
+        u->gain_token(TOKEN_PLAGUE, 1);
+        u->push(*p, 1);
+    }
 
-//     list<unit *> targets = c.self().units_in_range(1, 1);
-//     if (targets.empty()) return c.no_target();
+    p->set_hazard(true);
+    p->inc_corpses(-1);
+}
 
-//     unit *target = c.player_must_select_unit(targets);
-//     if (!target) return;
+
+// Range 2-6, Corpse. Choose a corpse or a hazard in range and swap places with it. You push all adjacent units 1 and become curseproof until the end of your next turn.
+void vermin_form(combat &c)
+{
+    map_space *p = c.player_must_select_space(c.self().space(), 2, 6, enum_or(SELECT_SPACE_CORPSES, SELECT_SPACE_HAZARD));
+    if (!p) return;
 
-//     int d6 = c.player_roll_d6(c.self(), ROLL_TAG_ATTACK);
-//     if (!c.is_hit(*target, d6)) {
-//         target->take_damage(1, enum_or(DAMAGE_GRAZE, DAMAGE_PHYSICAL), &c.self());
-//         return;
-//     }
+    p->inc_corpses(-1);
+    c.self().space()->inc_corpses(+1);
+    c.swap_unit_pos(c.self(), *p);
 
-//     target->take_damage(1, DAMAGE_PHYSICAL, &c.self());
-//     target->gain_token(TOKEN_PLAGUE, 1);
-//     c.self().gain_token(TOKEN_STRENGTH, 1);
+    list<unit *> u = c.units_in_range(*p, 1, 1);
+    for (unit *u : u)
+        u->push(c.self(), 1);
 
-//     if (target->is_slain()) {
-//         target->gain_token(TOKEN_PLAGUE, 1);
-//         c.self().gain_token(TOKEN_STRENGTH, 1);
-//     }
-// }
+    c.self().inc_trait(TRAIT_CURSEPROOF, +1);
+    c.self().inc_trait_after(TRAIT_CURSEPROOF, -1, TRIGGER_TURN_END, 2);
+}
 
-// // (3 SOUL) On hit: 1 damage and create a hazard under target (3+) and slow them (5+) twice.
-// void scourge(combat &c) {
-//     if (!c.player_may_spend_soul(3)) return c.no_resources();
 
-//     list<unit *> targets = c.self().units_in_range(2, 4);
-//     if (targets.empty()) return c.no_target();
+// Line 6. Effect: 1 plague (6+) or 2 plague. Already plagued foes take 1 toxic damage. Pull all affected units 1.
+void ceaseless_spew(combat &c)
+{
+    list<unit *> us = c.player_must_select_line(6);
+    if (us.empty())
+        return c.no_target();
 
-//     unit *target = c.player_must_select_unit(targets);
-//     if (!target) return;
+    int d6 = c.player_roll_d6(c.self());
+    int n = (d6 >= 6) ? 2 : 1;
 
-//     int d6 = c.player_roll_d6(c.self(), ROLL_TAG_ATTACK);
-//     if (!c.is_hit(*target, d6)) {
-//         target->take_damage(1, enum_or(DAMAGE_GRAZE, DAMAGE_PHYSICAL), &c.self());
-//         return;
-//     }
+    for (unit *u : us) {
+        if (!u->is_ally(c.self()) && u->find_token(TOKEN_PLAGUE))
+            u->take_damage(1, DAMAGE_TOXIC, &c.self());
+        u->gain_token(TOKEN_PLAGUE, n);
+        u->pull(c.self(), 1);
+    }
+}
 
-//     target->take_damage(1, DAMAGE_PHYSICAL, &c.self());
-//     target->space()->set_hazard(true);
 
-//     if (d6 >= 3) target->gain_token(TOKEN_SLOW, 1);
-//     if (d6 >= 5) target->gain_token(TOKEN_SLOW, 1);
-// }
+// On hit: 1 damage and Infect: 1 plague to foes and 1 strength to self or allied units. Double this effect if it slays a foe.
+void flesh_feeder_blade(combat &c)
+{
+    list<unit *> us = c.self().units_in_range(1, 1);
+    if (us.empty())
+        return c.no_target();
 
-// // (1 SOUL) Curse, Any turn, Range 1-3. Trigger: Turn start. Effect: Grant 2 plague tokens to a unit in range.
-// void infest(combat &c) {
-//     if (!c.player_may_spend_soul(1)) return c.no_resources();
+    unit *u = c.player_must_select_unit(us);
+    if (!u) return;
+
+    int d6 = c.player_roll_d6(c.self(), ROLL_TAG_ATTACK);
+    if (!c.is_hit(*u, d6))
+        return u->take_damage(1, enum_or(DAMAGE_GRAZE, DAMAGE_PHYSICAL), &c.self());
 
-//     list<unit *> targets = c.self().units_in_range(1, 3);
-//     if (targets.empty()) return c.no_target();
+    u->take_damage(1, DAMAGE_PHYSICAL, &c.self());
+    bool slained = !u->is_ally(c.self()) && u->is_slain();
 
-//     unit *target = c.player_must_select_unit(targets);
-//     if (!target) return;
+    us = c.player_must_select_infect(*u);
+    for (unit *u : us)
+        u->gain_token(u->is_ally(c.self()) ? TOKEN_STRENGTH : TOKEN_PLAGUE, slained ? 2 : 1);
+}
 
-//     target->gain_token(TOKEN_PLAGUE, 2);
-// }
 
-// // (3 SOUL) Any Turn. Trigger: Turn start. Effect: MOVE with free movement. Can pass through walls and units during this movement. After the movement finishes, push or pull all units in range 2 one space (5+) two spaces.
-// void slime_form(combat &c) {
-//     if (!c.player_may_spend_soul(3)) return c.no_resources();
+// Attack, Range 2-4: On hit: 1 damage and create a hazard under target (3+) and slow them (5+) twice.
+void scourge(combat &c)
+{
+    list<unit *> us = c.self().units_in_range(2, 4);
+    if (us.empty())
+        return c.no_target();
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    int d6 = c.player_roll_d6(c.self(), ROLL_TAG_ATTACK);
+    if (!c.is_hit(*u, d6))
+        return u->take_damage(1, enum_or(DAMAGE_GRAZE, DAMAGE_PHYSICAL), &c.self());
+
+    u->take_damage(1, DAMAGE_PHYSICAL, &c.self());
+    u->space()->set_hazard(true);
 
-//     c.unit_move(c.self(), enum_or(MOVEMENT_FREE, MOVEMENT_THROUGH_WALLS, MOVEMENT_THROUGH_UNITS));
 
-//     list<unit *> targets = c.self().units_in_range(1, 2);
-//     if (targets.empty()) return;
+    d6 = c.player_roll_d6(c.self());
+    int n = c.d6_gradations(d6, {{0, 0}, {3, 1}, {5, 2}});
+    u->gain_token(TOKEN_SLOW, n);
+}
+
+
+// Attack, Range 2-3: On hit: 1 toxic damage. Infect: 1 toxic damage. Effect: After this ability resolves, gain 1 plague on self for each unit affected.
+void necrocide(combat &c)
+{
+    list<unit *> us = c.self().units_in_range(2, 3);
+    if (us.empty())
+        return c.no_target();
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u) return;
+
+    int d6 = c.player_roll_d6(c.self(), ROLL_TAG_ATTACK);
+    if (!c.is_hit(*u, d6))
+        return u->take_damage(1, enum_or(DAMAGE_GRAZE, DAMAGE_TOXIC), &c.self());
+
+    u->take_damage(1, DAMAGE_TOXIC, &c.self());
+    int affected = 1;
 
-//     int d6 = c.player_roll_d6(c.self());
-//     int spaces = (d6 >= 5) ? 2 : 1;
+    us = c.player_must_select_infect(*u);
+    for (unit *u : us) {
+        u->take_damage(1, DAMAGE_TOXIC, &c.self());
+        affected++;
+    }
+
+    c.self().gain_token(TOKEN_PLAGUE, affected);
+}
+
+
+// (1 SOUL) Curse, Any turn, Range 1-3. Trigger: Turn start. Effect: Grant 2 plague tokens to a unit in range.
+void infest(combat &c)
+{
+    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_NO_CURSEPROOF);
+    if (us.empty())
+        return c.no_target();
+
+    if (!c.player_may_spend_soul(1))
+        return c.no_resources();
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
 
-//     for (unit *target : targets) {
-//         target->push(c.self(), spaces);
-//     }
-// }
-
-// // (1 SOUL) Self or Allied turn, Range 1-3. Remove up to three plague tokens from self or allied unit and grant them to any other adjacent unit to target, then remove a negative token for each plague token removed.
-// void purge_guts(combat &c) {
-//     if (!c.player_may_spend_soul(1)) return c.no_resources();
-
-//     list<unit *> targets = c.self().units_in_range(1, 3, SELECT_UNIT_NO_FOE);
-//     if (targets.empty()) return c.no_target();
-
-//     unit *target = c.player_must_select_unit(targets);
-//     if (!target) return;
-
-//     int plague_tokens = min(3, target->n_tokens(SELECT_TOKEN_PLAGUE));
-//     for (int i = 0; i < plague_tokens; ++i) {
-//         token *plague = target->find_token(TOKEN_PLAGUE);
-//         if (!plague) break;
-
-//         target->remove_token(plague->type(), 1);
-
-//         list<unit *> adjacent_units = target->units_in_range(1, SELECT_UNIT_NO_SELF);
-//         if (adjacent_units.empty()) continue;
-
-//         unit *adjacent_target = c.player_must_select_unit(adjacent_units);
-//         if (!adjacent_target) continue;
-
-//         adjacent_target->gain_token(TOKEN_PLAGUE, 1);
-//     }
-
-//     for (int i = 0; i < plague_tokens; ++i) {
-//         token *negative = target->find_token(SELECT_TOKEN_NEGATIVE);
-//         if (!negative) break;
-
-//         target->remove_token(negative->type(), 1);
-//     }
-// }
-
-// // (1 SOUL) Curse, Any turn, Range 1-3. Trigger: Turn start. Unit gains 1 slow and creates a hazard under themselves at the end of this turn.
-// void insides_out(combat &c) {
-//     if (!c.player_may_spend_soul(1)) return c.no_resources();
-
-//     list<unit *> targets = c.self().units_in_range(1, 3);
-//     if (targets.empty()) return c.no_target();
-
-//     unit *target = c.player_must_select_unit(targets);
-//     if (!target) return;
-
-//     target->gain_token(TOKEN_SLOW, 1);
-//     target->set_trait(TRAIT_CREATE_HAZARD_ON_TURN_END, 1);
-// }
-
-// // (2 SOUL) Any turn, Range 1-3. Trigger: Turn start. Double all plague tokens on a unit. If this puts them at 5 or more tokens, they also explode with splash (target): 1 toxic damage.
-// void fecundity(combat &c) {
-//     if (!c.player_may_spend_soul(2)) return c.no_resources();
-
-//     list<unit *> targets = c.self().units_in_range(1, 3, SELECT_UNIT_WITH_PLAGUE_TOKENS);
-//     if (targets.empty()) return c.no_target();
-
-//     unit *target = c.player_must_select_unit(targets);
-//     if (!target) return;
-
-//     int plague_tokens = target->n_tokens(SELECT_TOKEN_PLAGUE);
-//     target->gain_token(TOKEN_PLAGUE, plague_tokens);
-
-//     if (target->n_tokens(SELECT_TOKEN_PLAGUE) >= 5) {
-//         list<unit *> splash_targets = target->units_in_range(1, SELECT_UNIT_NO_SELF);
-//         for (unit *u : splash_targets) {
-//             u->take_damage(1, DAMAGE_TOXIC, &c.self());
-//         }
-//     }
-// }
-
-// // (3 SOUL) Curse, Any turn, Range 1-3. Trigger: Target turn start. At the end of the targeted unit's turn, targeted unit takes 1 piercing toxic damage for every hazard in range 2 of them.
-// void unholy_vapors(combat &c) {
-//     if (!c.player_may_spend_soul(3)) return c.no_resources();
-
-//     list<unit *> targets = c.self().units_in_range(1, 3);
-//     if (targets.empty()) return c.no_target();
-
-//     unit *target = c.player_must_select_unit(targets);
-//     if (!target) return;
-
-//     target->set_trait(TRAIT_UNHOLY_VAPORS, 1);
-// }
-
-// // (4 SOUL) Own turn, Range 1-2. Place one hazard in range for every other hazard in range.
-// void praise_the_filth(combat &c) {
-//     if (!c.player_may_spend_soul(4)) return c.no_resources();
-
-//     list<map_space *> hazards = c.self().spaces_in_range(1, 2, SELECT_SPACE_HAZARD);
-//     int hazard_count = hazards.size();
-
-//     for (int i = 0; i < hazard_count; ++i) {
-//         map_space *space = c.player_must_select_space(c.self().space(), 1, 2, SELECT_SPACE_FREE);
-//         if (!space) break;
-
-//         space->set_hazard(true);
-//     }
-// }
-
-// // (6 SOUL) Own turn. Remove up to four corpse tokens or hazards and summon a SCUM unit for each. Then splash (target) on all scum created this way for 1 toxic damage to foes. Characters can only be damaged once by this effect.
-// void mox_populi(combat &c) {
-//     if (!c.player_may_spend_soul(6)) return c.no_resources();
-
-//     list<map_space *> spaces = c.self().spaces_in_range(1, 4, enum_or(SELECT_SPACE_CORPSE, SELECT_SPACE_HAZARD));
-//     if (spaces.empty()) return c.no_target();
-
-//     optional<int> remove_count = c.player_must_select_corpse_count(min(4, (int)spaces.size()));
-//     if (!remove_count) return;
-
-//     for (int i = 0; i < *remove_count; ++i) {
-//         map_space *space = c.player_must_select_space(c.self().space(), 1, 4, enum_or(SELECT_SPACE_CORPSE, SELECT_SPACE_HAZARD));
-//         if (!space) break;
-
-//         space->set_hazard(false);
-//         c.inc_corpse(*space, -1);
-//         c.summon_unit(UNIT_SCUM, *space);
-//     }
-
-//     list<unit *> scum_units = c.self().units_in_range(1, 4, SELECT_UNIT_SCUM);
-//     for (unit *scum : scum_units) {
-//         list<unit *> splash_targets = scum->units_in_range(1, SELECT_UNIT_NO_SELF);
-//         for (unit *u : splash_targets) {
-//             u->take_damage(1, DAMAGE_TOXIC, &c.self());
-//         }
-//     }
-// }
-
-// // Fueled by Rage: Gain 1 berserk token at the start of your turn. You may spend berserk tokens as speed tokens and vice versa.
-// void fueled_by_rage(combat &c) {
-//     c.self().gain_token(TOKEN_BERSERK, 1);
-//     c.self().may_treat_token_a_as_b(TOKEN_BERSERK, TOKEN_SPEED);
-// }
-
-// // Nerve Twitch: At 3 HP or lower, DF increases to 5+.
-// void nerve_twitch(combat &c) {
-//     if (c.self().hp() <= 3) {
-//         c.self().set_trait(TRAIT_ALTERED_DF, 5);
-//     }
-// }
-
-// // Blood Drinker: Slaying a unit clears two negative tokens.
-// void blood_drinker(combat &c) {
-//     if (c.trigger() == TRIGGER_AFTER_SLAY) {
-//         list<token *> negative_tokens = c.self().tokens(SELECT_TOKEN_NEGATIVE);
-//         for (int i = 0; i < 2 && !negative_tokens.empty(); ++i) {
-//             token *t = negative_tokens.front();
-//             c.self().remove_token(t->type(), 1);
-//             negative_tokens.pop_front();
-//         }
-//     }
-// }
-
-// // Blood Rush: At 3 HP or lower, gain retaliation.
-// void blood_rush(combat &c) {
-//     if (c.self().hp() <= 3) {
-//         c.self().inc_trait(TRAIT_RETALIATION, 1);
-//     }
-// }
-
-// // Superheated Chainblade: Attack, melee.
-// // On hit: 1 damage, Effect: (4+): 1 fire damage again, (6+): 1 fire damage again.
-// void superheated_chainblade(combat &c) {
-//     list<unit *> targets = c.self().units_in_range(1, 1);
-//     if (targets.empty()) return c.no_target();
-
-//     unit *target = c.player_must_select_unit(targets);
-//     if (!target) return;
-
-//     int d6 = c.player_roll_d6(c.self(), ROLL_TAG_ATTACK);
-//     if (!c.is_hit(*target, d6)) {
-//         target->take_damage(1, enum_or(DAMAGE_GRAZE, DAMAGE_PHYSICAL), &c.self());
-//         return;
-//     }
-
-//     target->take_damage(1, DAMAGE_PHYSICAL, &c.self());
-//     if (d6 >= 4) target->take_damage(1, DAMAGE_FIRE, &c.self());
-//     if (d6 >= 6) target->take_damage(1, DAMAGE_FIRE, &c.self());
-// }
-
-// // Quench: Self.
-// // Effect: Convert up to 3 negative tokens on self or adjacent allies to speed or strength tokens. Then this unit becomes curseproof until the start of its next turn.
-// void quench(combat &c) {
-//     list<unit *> units = c.self().units_in_range(1, SELECT_UNIT_NO_FOE);
-//     units.push_front(&c.self());
-
-//     int converted = 0;
-//     for (unit *u : units) {
-//         list<token *> negative_tokens = u->tokens(SELECT_TOKEN_NEGATIVE);
-//         while (!negative_tokens.empty() && converted < 3) {
-//             token *t = negative_tokens.front();
-//             u->remove_token(t->type(), 1);
-//             c.self().gain_token(c.player_must_select_token_type({TOKEN_SPEED, TOKEN_STRENGTH}), 1);
-//             negative_tokens.pop_front();
-//             ++converted;
-//         }
-//     }
-
-//     c.self().set_trait(TRAIT_CURSEPROOF, 2);
-// }
-
-// // Frenzy Chain: Range 2-3.
-// // Pull a unit in range 2 spaces. Effect (3+): Pull another unit. (5+): Pull another unit.
-// void frenzy_chain(combat &c) {
-//     list<unit *> targets = c.self().units_in_range(2, 3);
-//     if (targets.empty()) return c.no_target();
-
-//     unit *target = c.player_must_select_unit(targets);
-//     if (!target) return;
-
-//     target->pull(c.self(), 2);
-
-//     int d6 = c.player_roll_d6(c.self());
-//     if (d6 >= 3) {
-//         targets.remove(target);
-//         if (!targets.empty()) {
-//             unit *second_target = c.player_must_select_unit(targets);
-//             if (second_target) second_target->pull(c.self(), 2);
-//         }
-//     }
-//     if (d6 >= 5) {
-//         targets.remove(target);
-//         if (!targets.empty()) {
-//             unit *third_target = c.player_must_select_unit(targets);
-//             if (third_target) third_target->pull(c.self(), 2);
-//         }
-//     }
-// }
-
-// // Furious Roar: Self.
-// // Destroy adjacent walls. Then, self and two other adjacent units may step 1 and gain 1 speed.
-// void furious_roar(combat &c) {
-//     list<map_space *> walls = c.self().spaces_in_range(1, 1, SELECT_SPACE_WALLS);
-//     for (map_space *wall : walls) {
-//         wall->set_wall(false);
-//     }
-
-//     list<unit *> units = c.self().units_in_range(1, SELECT_UNIT_NO_FOE);
-//     units.push_front(&c.self());
-
-//     int steps = 0;
-//     for (unit *u : units) {
-//         if (steps >= 3) break;
-//         c.unit_step(*u, 1);
-//         u->gain_token(TOKEN_SPEED, 1);
-//         ++steps;
-//     }
-// }
-
-// // ...existing code...
+    u->gain_token(TOKEN_PLAGUE, 2);
+}
+
+// (3 SOUL) Any Turn. Trigger: Turn start. Effect: MOVE with free movement. Can pass through walls and units during this movement. After the movement finishes, push or pull all units in range 2 one space (5+) two spaces.
+void slime_form(combat &c)
+{
+    if (!c.player_may_spend_soul(3))
+        return c.no_resources();
+
+    c.unit_move_again(c.self(), enum_or(MOVEMENT_FREE, MOVEMENT_THROUGH_FOES, MOVEMENT_THROUGH_WALLS));
+
+    list<unit *> u = c.self().units_in_range(1, 2);
+    if (u.empty())
+        return;
+
+    int d6 = c.player_roll_d6(c.self());
+    int n = (d6 >= 5) ? 2 : 1;
+    for (unit *u : u)
+        u->push(c.self(), n);
+}
+
+
+// (1 SOUL) Self or Allied turn, Range 1-3. Remove up to three plague tokens from self or allied unit and grant them to any other adjacent unit to target, then remove a negative token for each plague token removed.
+void purge_guts(combat &c)
+{
+    if (!c.player_may_spend_soul(1))
+        return c.no_resources();
+
+    list<unit *> us = c.self().units_in_range(0, 3, SELECT_UNIT_NO_FOE);
+    if (us.empty())
+        return c.no_target();
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    token *t = u->find_token(TOKEN_PLAGUE);
+    optional<int> removed = c.player_must_select_token_count(min(3, t->count()));
+    if (!removed)
+        return;
+
+    c.self().remove_token(t->type(), *removed);
+    us = c.units_in_range(*u->space(), 1, 1);
+    if (us.empty())
+        return;
+
+    unit *a = c.player_must_select_unit(us);
+    a->gain_token(t->type(), *removed);
+
+    if (!c.then())
+        return;
+
+    int n = min(*removed, u->n_tokens(enum_or(SELECT_TOKEN_NEGATIVE, SELECT_TOKEN_REMOVABLE)));
+    while (n--) {
+        token *t = c.player_may_select_token(u->tokens(), enum_or(SELECT_TOKEN_NEGATIVE, SELECT_TOKEN_REMOVABLE));
+        u->remove_token(t->type(), 1);
+    }
+}
+
+
+// (1 SOUL) Curse, Any turn, Range 1-3. Trigger: Turn start. Unit gains 1 slow and creates a hazard under themselves at the end of this turn.
+void insides_out(combat &c)
+{
+    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_NO_CURSEPROOF);
+    if (us.empty())
+        return c.no_target();
+
+    if (!c.player_may_spend_soul(1))
+        return c.no_resources();
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    auto effect = [](combat &c){
+        c.self().gain_token(TOKEN_SLOW);
+        c.self().space()->set_hazard(true);
+    };
+    u->do_after(effect, TRIGGER_TURN_END, 1);
+}
+
+
+// (2 SOUL) Any turn, Range 1-3. Trigger: Turn start. Double all plague tokens on a unit. If this puts them at 5 or more tokens, they also explode with splash (target): 1 toxic damage.
+void fecundity(combat &c)
+{
+    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_WITH_PLAGUE_TOKENS);
+    if (us.empty())
+        return c.no_target();
+
+    if (!c.player_may_spend_soul(2))
+        return c.no_resources();
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    int n = u->n_tokens(SELECT_TOKEN_PLAGUE);
+    u->gain_token(TOKEN_PLAGUE, n);
+
+    if (u->n_tokens(SELECT_TOKEN_PLAGUE) >= 5) {
+        list<unit *> splash = u->units_in_range(1, 1);
+        for (unit *u : splash)
+            u->take_damage(1, DAMAGE_TOXIC, &c.self());
+    }
+}
+
+// (3 SOUL) Curse, Any turn, Range 1-3. Trigger: Target turn start. At the end of the targeted unit's turn, targeted unit takes 1 piercing toxic damage for every hazard in range 2 of them.
+void unholy_vapors(combat &c)
+{
+    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_NO_CURSEPROOF);
+    if (us.empty())
+        return c.no_target();
+
+    if (!c.player_may_spend_soul(3))
+        return c.no_resources();
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return;
+
+    auto effect = [](combat &c) {
+        int n = c.self().spaces_in_range(0, 2, SELECT_SPACE_HAZARD).size();
+        c.self().take_damage(1, DAMAGE_PIERCING, nullptr);
+    };
+    u->do_after(effect, TRIGGER_TURN_END, 1);
+}
+
+
+// (4 SOUL) Own turn, Range 1-2. Place one hazard in range for every other hazard in range.
+void praise_the_filth(combat &c)
+{
+    list<map_space *> ps = c.self().spaces_in_range(1, 2, SELECT_SPACE_HAZARD);
+    int n = ps.size();
+    if (!n)
+        return c.no_resources();
+
+    if (!c.player_may_spend_soul(4))
+        return c.no_resources();
+
+    while (n--) {
+        map_space *p = c.player_must_select_space(c.self().space(), 1, 2, SELECT_SPACE_NO_WALLS);
+        if (!p)
+            break;
+        p->set_hazard(true);
+    }
+}
+
+
+// (6 SOUL) Own turn. Remove up to four corpse tokens or hazards and summon a SCUM unit for each. Then splash (target) on all scum created this way for 1 toxic damage to foes. Characters can only be damaged once by this effect.
+void scum(unit_card &c);
+void mox_populi(combat &c)
+{
+    list<map_space *> ps = c.self().spaces_in_range(0, 999, enum_or(SELECT_SPACE_CORPSES, SELECT_SPACE_HAZARD, SELECT_SPACE_IGNORE_LINE_OF_SIGHT));
+    int n = 0;
+    for (map_space *p : ps)
+        n += p->n_corpses() + 1 * p->is_hazard();
+
+    if (!n)
+        return c.no_target();
+
+    if (!c.player_may_spend_soul(6))
+        return c.no_resources();
+
+    int removed = 0;
+    while (removed < min(4, n)) {
+        map_space *p = c.player_must_select_space(c.self().space(), 0, 999, enum_or(SELECT_SPACE_CORPSES, SELECT_SPACE_HAZARD, SELECT_SPACE_IGNORE_LINE_OF_SIGHT));
+        if (!p)
+            return;
+        if (p->n_corpses()) {
+            removed++;
+            p->inc_corpses(-1);
+            continue;
+        }
+        if (p->is_hazard()) {
+            removed++;
+            p->set_hazard(false);
+            continue;
+        }
+    }
+
+    set<unit *> splash;
+    ps = c.player_must_select_spaces(c.self().space(), min(4, removed), 1, 999, enum_or(SELECT_SPACE_FREE, SELECT_SPACE_IGNORE_LINE_OF_SIGHT));
+    for (map_space *p : ps) {
+        c.summon(*p, scum);
+
+        list<unit *> us = c.units_in_range(*p, 1, 1, SELECT_UNIT_FOE);
+        splash.insert(us.begin(), us.end());
+    }
+
+    if (!c.then())
+        return;
+
+    list<unit *> us(splash.begin(), splash.end());
+    sort(us.begin(), us.end());
+    for (unit *u : us)
+        u->take_damage(1, DAMAGE_TOXIC, &c.self());
+}
 
 // // (1 SOUL) Own or Allied turn. Range 2-3. Trigger: Start of turn. Create a wall in range and inflict 1 weak on adjacent foes to the wall.
 // void cyclopean_monolith(combat &c) {
@@ -5606,6 +5599,29 @@ void plaguelord(unit_card &c)
 {
     c.set_faction_type(FACTION_GARGAMOX, UNIT_NECROMANCER);
     c.set_stats(4, 10, 4, ARMOR_NONE);
+
+    c.add_trait(enum_or(TRIGGER_COMBAT_START, TRIGGER_TURN_START), blessed_with_filth);
+    c.add_bonus_trait(TRIGGER_AFTER_POS_CHANGED, pollution_shroud);
+    c.add_bonus_trait(TRIGGER_AFTER_MOVE, corruptor);
+    c.add_bonus_trait(TRIGGER_COMBAT_START, spreader);
+
+    c.add_act_ability(virulence);
+    c.add_upgrade_act_ability(melt);
+    c.add_upgrade_act_ability(corpse_explosion);
+    c.add_upgrade_act_ability(vermin_form);
+    c.add_upgrade_act_ability(ceaseless_spew);
+    c.add_upgrade_act_ability(flesh_feeder_blade);
+    c.add_upgrade_act_ability(scourge);
+    c.add_upgrade_act_ability(necrocide);
+
+    c.add_soul_ability(enum_or(TRIGGER_SOUL_ANY_TURN, TRIGGER_TURN_START), infest);
+    c.add_soul_ability(enum_or(TRIGGER_SOUL_ANY_TURN, TRIGGER_TURN_START), slime_form);
+    c.add_upgrade_soul_ability(TRIGGER_SOUL_OWN_OR_ALLIED_TURN, purge_guts);
+    c.add_upgrade_soul_ability(enum_or(TRIGGER_SOUL_ANY_TURN, TRIGGER_TURN_START), insides_out);
+    c.add_upgrade_soul_ability(enum_or(TRIGGER_SOUL_ANY_TURN, TRIGGER_TURN_START), fecundity);
+    c.add_upgrade_soul_ability(enum_or(TRIGGER_SOUL_ANY_TURN, TRIGGER_TURN_START), unholy_vapors);
+    c.add_upgrade_soul_ability(TRIGGER_SOUL_OWN_TURN, praise_the_filth);
+    c.add_upgrade_soul_ability(TRIGGER_SOUL_OWN_TURN, mox_populi);
 }
 
 
