@@ -14,6 +14,7 @@ enum trigger_type
     TRIGGER_COMBAT_START,
     TRIGGER_ACTION_MANUAL,
     TRIGGER_ROUND_START, // round is when every unit takes a turn
+    TRIGGER_ROUND_END,
     TRIGGER_TURN_START,
     TRIGGER_TURN_END,
     TRIGGER_BEFORE_MOVE,
@@ -36,6 +37,8 @@ enum trigger_type
     TRIGGER_AFTER_UNIT_SLAINED,
     TRIGGER_AFTER_SLAIN, // self killed other
     TRIGGER_AFTER_UNIT_TURN_END, // after any unit's turn ends
+    TRIGGER_BEFORE_ATTACKED,
+    TRIGGER_AFTER_ATTACKED,
 
     TRIGGER_SOUL_OWN_TURN,
     TRIGGER_SOUL_ALLIED_TURN,
@@ -62,6 +65,8 @@ enum take_action
     TAKE_ACTION_STANCE_2,
     TAKE_ACTION_STANCE_5,
     TAKE_ACTION_REMOVE_NEGATIVE_TOKEN,
+    TAKE_ACTION_SUMMON_FLOCK,
+    TAKE_ACTION_DIVE_BOMB,
 };
 
 
@@ -95,6 +100,11 @@ enum damage_type
 
     // can't be increased, reduced or ignored, obliterates on slay
     DAMAGE_DEVIL,
+
+    // damage source: for immunities tracking
+    // TODO: go and set this damage types across the implemented abilities
+    DAMAGE_FROM_LINE,
+    DAMAGE_FROM_SPLASH,
 
     // inherits damage type, but no other properties
     DAMAGE_GRAZE,
@@ -131,7 +141,7 @@ enum unit_faction
     FACTION_DEADSOULS,
     FACTION_ABHORRER,
     FACTION_IGORRI,
-
+    FACTION_STEEPLEWRACK,
 };
 
 
@@ -161,6 +171,7 @@ enum trait_id
     TRAIT_IMMUNE_TO_HAZARDS,
     TRAIT_IMMUNE_TO_SPLASH_DAMAGE,
     TRAIT_IMMUNE_TO_LINE_DAMAGE,
+    TRAIT_IMMUNE_TO_GRAZE_DAMAGE,
     TRAIT_IMMUNE_TO_ALL_DAMAGE,
     TRAIT_RANGED_ATTACKS_AUTO_MISS,
     TRAIT_MOVEMENT_FREE,
@@ -259,6 +270,13 @@ enum trait_id
     TRAIT_GROW_BONUS_LIMBS,
     // tick down at the of your turn, obliterated when reaches zero
     TRAIT_FINAL_FORM,
+
+    TRAIT_BLOOD_FRENZY,
+    // number of times in round, that dive bomb can be used
+    TRAIT_DIVE_BOMB_CHARGE,
+    TRAIT_DIVE_BOMB_RABID_CHARGE,
+    TRAIT_ENDLESS_CHARGE,
+    TRAIT_SINEW,
 };
 
 
@@ -580,6 +598,43 @@ enum upgrade_id
     UPGRADE_MELD,
     // If absorb destroys a unit, gains physical armor for the rest of combat
     UPGRADE_FORM_CARAPACE,
+
+    // Bloodletting gains Rip Apart (5+): deal 1 curse damage again.
+    UPGRADE_THE_RED_WET_HUE,
+    // At round 5+, become immune to graze, line, and splash damage.
+    UPGRADE_BLOOD_FRENZY,
+    // Dive Bomb may be used for free on one Flock each round.
+    UPGRADE_RABID,
+    // At 1 HP or lower, become immune to damage from grazes, lines, and splash effects.
+    UPGRADE_SINEW,
+    // Cannibalize may target an enemy at 1 HP or lower but grants no tokens when used this way.
+    UPGRADE_VORACIOUS,
+    // Raise Roost gains +1 range and may first pull a unit in range 2 by one space.
+    UPGRADE_THE_NOOSE,
+    // Sonic Screech also grants one or two allies in the area 1 speed or strength.
+    UPGRADE_EAR_SPLITTER,
+    // Paranoia deals 1 piercing curse damage but only counts as +1 adjacent unit.
+    UPGRADE_PAINFUL_WHISPERS,
+    // When Siren's Song expires, adjacent allies gain 1 speed.
+    UPGRADE_LULLABY,
+    // If starting turn adjacent to a wall, gain 1 speed and clear a negative token.
+    UPGRADE_PERCHING,
+    // While adjacent to a wall, damage ignores vitality and armor.
+    UPGRADE_WRITHING,
+    // While adjacent to a wall, become curseproof.
+    UPGRADE_CLINGING,
+    // When arriving, may slay all adjacent allied units and gain 1 speed or strength for each.
+    UPGRADE_MESSY_ARRIVAL,
+    // Lose Large and gain free movement.
+    UPGRADE_SLEEK_OWL,
+    // Concussive Shriek also slays allied units in the area, counting each as a wall.
+    UPGRADE_BONE_RESONANCE,
+    // If Feeding Call triggers two or more times before expiring, gain 2 strength.
+    UPGRADE_ENTRAIL_SCATTER,
+    // Horrendous Pecking does not end when this unit moves outside its turn.
+    UPGRADE_JITTER,
+    // Flense ignores armor and vitality against targets at 1 HP or lower.
+    UPGRADE_WOLF_DOWN,
 };
 
 
@@ -621,15 +676,17 @@ struct map_space
 };
 
 
+// the action has been resolved, either successfully or not. and should not be rerolled.
 enum class action_resolved
 {
-    OK,
+    COMPLETELY,
     PREMATURELY,
     PLAYER_CHOSE_NOT_TO,
     MISSED_A_HIT,
 };
 
 
+// if action can't be done further (or even started). rollback if possible. it's not possible, if RNG or some undoable changes and choices were made.
 enum class action_prevented
 {
     NO_TARGET, // TODO: split into no units, no tokens, etc...
@@ -645,6 +702,7 @@ enum class action_prevented
 };
 
 
+// action failed, because timeout or something. rollback if possible
 enum class action_failed
 {
     PLAYER_IGNORED_MUST_SELECT,
@@ -706,6 +764,10 @@ struct unit
     virtual bool has_cover(unit &from) const = 0;
     virtual bool is_adjacent_to_ally() const = 0;
     bool is_isolated() const { return !is_adjacent_to_ally(); }
+    // if to_who is nullptr, use the self as the target
+    virtual int rip_apart_for(const unit *to_who = nullptr) const = 0;
+    // return if rip_apart is x or more
+    virtual bool rip_apart_for(int x, const unit *to_who = nullptr) const = 0;
     // most effects doesn't affect walls, but some abilities require to know what did they hit, wall or not
     virtual bool is_wall() const = 0;
     virtual void may_treat_token_a_as_b(token_type a, token_type b) = 0;
@@ -739,7 +801,7 @@ struct combat
     // splits the turn to the atomic actions, that can't be interrupted
     virtual bool then() = 0;
 
-    virtual action_result action_resolved(action_resolved st = action_resolved::OK) = 0;
+    virtual action_result action_resolved(action_resolved st = action_resolved::COMPLETELY) = 0;
     virtual action_result action_prevented(action_prevented why) = 0;
     virtual action_result action_failed(action_failed why = action_failed::PLAYER_IGNORED_MUST_SELECT) = 0;
     #ifndef NDEBUG
@@ -764,13 +826,17 @@ struct combat
     virtual list<unit *> player_must_select_line(int, list<map_space *>*poses = nullptr) = 0;
     virtual map_space *player_must_select_space(const map_space *, int range, select_space_filter filter = SELECT_SPACE_ANY) = 0;
     virtual map_space *player_must_select_space(const map_space *, int min, int max, select_space_filter filter = SELECT_SPACE_ANY) = 0;
+    virtual map_space *player_must_select_space(const list<map_space *> &spaces, select_space_filter filter = SELECT_SPACE_ANY) = 0;
     virtual list<map_space *> player_must_select_spaces(const map_space *, int up_to, int min, int max, select_space_filter filter = SELECT_SPACE_ANY) = 0;
     virtual optional<direction> player_must_select_direction() = 0;
     virtual bool player_may_take_action(take_action) = 0;
     virtual bool player_may_spend_soul(int x) = 0;
     virtual int player_roll_d6(unit &who, roll_tag tags = ROLL_TAG_NONE, int extra_mod = 0) = 0;
+
     virtual int d6_gradations(int d6, const map<int, int> &treshold_to_result = {}) const = 0;
     virtual bool is_headshot(int d6) const = 0;
+    // how much unit slots were spent on pre-combat buying phase on the exact unit
+    virtual int player_unit_slots_spent_on(unit_faction, unit_type) const = 0;
 
     virtual list<unit *> units_in_range(const map_space &, int min, int max, select_unit_filter f = SELECT_UNIT_ANY) const = 0;
 
@@ -6380,6 +6446,397 @@ action_result resurrection(combat &c)
 }
 
 
+// Attack, melee. On hit: 1 damage. Rip Apart (3+): with piercing.
+action_result bloodletting(combat &c)
+{
+    list<unit *> units = c.self().units_in_range(1, 1);
+    if (units.empty())
+        return c.action_prevented(action_prevented::NO_TARGET);
+
+    unit *u = c.player_must_select_unit(units);
+    if (!u)
+        return c.action_failed();
+
+    int d6 = c.player_roll_d6(*u, ROLL_TAG_ATTACK);
+    if (!c.is_hit(*u, d6)) {
+        u->take_damage(1, enum_or(DAMAGE_GRAZE, DAMAGE_PHYSICAL), &c.self());
+        return c.action_resolved(action_resolved::MISSED_A_HIT);
+    }
+
+    damage_type t = u->rip_apart_for(3) ? enum_or(DAMAGE_PIERCING, DAMAGE_PHYSICAL) : DAMAGE_PHYSICAL;
+    u->take_damage(1, t, &c.self());
+
+    if (c.self().has_upgrade(UPGRADE_THE_RED_WET_HUE) && u->rip_apart_for(5))
+        u->take_damage(1, DAMAGE_CURSE, &c.self());
+    return c.action_resolved();
+}
+
+
+action_result blood_frenzy(combat &c)
+{
+    if (c.self().has_upgrade(UPGRADE_BLOOD_FRENZY))
+        return c.action_prevented(action_prevented::NO_UPGRADE);
+
+    bool was = c.self().trait(TRAIT_BLOOD_FRENZY);
+    bool will = c.round(5);
+    if (will == was)
+        return c.action_resolved();
+
+    int inc = will ? +1 : -1;
+    c.self().inc_trait(TRAIT_BLOOD_FRENZY, inc);
+    c.self().inc_trait(TRAIT_IMMUNE_TO_GRAZE_DAMAGE, inc);
+    c.self().inc_trait(TRAIT_IMMUNE_TO_LINE_DAMAGE, inc);
+    c.self().inc_trait(TRAIT_IMMUNE_TO_SPLASH_DAMAGE, inc);
+    return c.action_resolved();
+}
+
+
+// Once a round, at the end of own or an allied turn, a single steeplewrack unit may MOVE for free.
+action_result dive_bomb(combat &c)
+{
+    if (c.trigger() == TRIGGER_ROUND_START) {
+        c.self().set_trait(TRAIT_DIVE_BOMB_CHARGE, 1);
+        c.self().set_trait(TRAIT_DIVE_BOMB_RABID_CHARGE, 1);
+        return c.action_resolved();
+    }
+    if (c.trigger() != TRIGGER_TURN_END)
+        return c.action_unreachable();
+
+    list<unit *> us = c.self().units_in_range(0, 999, enum_or(SELECT_UNIT_NO_FOE, SELECT_UNIT_IGNORE_LINE_OF_SIGHT));
+    if (us.empty())
+        return c.action_prevented(action_prevented::NO_TARGET);
+
+    bool rabid = any_of(us.begin(), us.end(), [](const unit *u) { return u->has_upgrade(UPGRADE_RABID); });
+    bool charge = c.self().trait(TRAIT_DIVE_BOMB_CHARGE);
+    bool charge_rabid = c.self().trait(TRAIT_DIVE_BOMB_RABID_CHARGE);
+    bool has_charge =
+        (!rabid && charge) || (rabid && (charge || charge_rabid));
+
+    if (!has_charge)
+        return c.action_prevented(action_prevented::ALREADY_USED);
+
+    if (!c.player_may_take_action(TAKE_ACTION_DIVE_BOMB))
+        return c.action_resolved(action_resolved::PLAYER_CHOSE_NOT_TO);
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return c.action_failed();
+
+    rabid = u->has_upgrade(UPGRADE_RABID);
+    trait_id spent = rabid && charge_rabid ? TRAIT_DIVE_BOMB_RABID_CHARGE : TRAIT_DIVE_BOMB_CHARGE;
+    c.self().inc_trait(spent, -1);
+
+    c.unit_move_again(*u);
+    return c.action_resolved();
+}
+
+
+// Self. Gain 1 speed or (6+) 2 speed. May immediately spend 2 speed to summon a Flock adjacent.
+void flock(unit_card &);
+action_result call_to_feast(combat &c)
+{
+    int n = c.player_roll_d6(c.self()) >= 6 ? 2 : 1;
+    c.self().gain_token(TOKEN_SPEED, n);
+
+    list<map_space *> ps = c.self().spaces_in_range(0, 1, SELECT_SPACE_FREE);
+    token *t = c.self().find_token(TOKEN_SPEED);
+    if (!t || t->count() < 2 || ps.empty())
+        return c.action_resolved(action_resolved::PREMATURELY);
+
+    if (!c.player_may_take_action(TAKE_ACTION_SUMMON_FLOCK))
+        return c.action_resolved(action_resolved::PLAYER_CHOSE_NOT_TO);
+
+    map_space *p = c.player_must_select_space(ps);
+    if (!p)
+        return c.action_failed();
+
+    c.self().remove_token(TOKEN_SPEED, 2);
+    c.summon(*p, flock);
+    return c.action_resolved();
+}
+
+
+// Attack, melee. On hit: 1 damage. Rip Apart (3+): +1 damage and gain 1 speed. Rip Apart (5+): gain 1 strength and summon a Flock adjacent to target.
+action_result disembowel(combat &c)
+{
+    list<unit *> units = c.self().units_in_range(1, 1);
+    if (units.empty())
+        return c.action_prevented(action_prevented::NO_TARGET);
+
+    unit *u = c.player_must_select_unit(units);
+    if (!u)
+        return c.action_failed();
+
+    int d6 = c.player_roll_d6(*u, ROLL_TAG_ATTACK);
+    if (!c.is_hit(*u, d6)) {
+        u->take_damage(1, enum_or(DAMAGE_GRAZE, DAMAGE_PHYSICAL), &c.self());
+        return c.action_resolved(action_resolved::MISSED_A_HIT);
+    }
+
+    bool ra3 = u->rip_apart_for(3);
+    int dmg = ra3 ? 2 : 1;
+    u->take_damage(dmg, DAMAGE_PHYSICAL, &c.self());
+    if (ra3)
+        c.self().gain_token(TOKEN_SPEED);
+
+    if (u->rip_apart_for(5)) {
+        c.self().gain_token(TOKEN_STRENGTH);
+        list<map_space *> ps = u->spaces_in_range(0, 1, SELECT_SPACE_FREE);
+        if (!ps.empty()) {
+            map_space *p = c.player_must_select_space(ps);
+            if (!p)
+                return c.action_failed();
+            c.summon(*p, flock);
+        }
+    }
+    return c.action_resolved();
+}
+
+
+// Range 1-3. Create a wall in range, then grant 1 speed to one (3+), two (5+), or all adjacent allied units.
+action_result raise_roost(combat &c)
+{
+    bool noose = c.self().has_upgrade(UPGRADE_THE_NOOSE);
+    list<map_space *> ps = c.self().spaces_in_range(1, noose ? 4 : 3, SELECT_SPACE_FREE);
+    if (ps.empty())
+        return c.action_prevented(action_prevented::NO_TARGET);
+
+    map_space *p = c.player_must_select_space(ps);
+    if (!p)
+        return c.action_failed();
+
+    p->set_wall(true);
+    if (noose) {
+        list<unit *> us = c.units_in_range(*p, 1, 2);
+        if (!us.empty()) {
+            unit *u = c.player_may_select_unit(us);
+            if (u)
+                u->pull(c.self(), 1);
+        }
+    }
+    list<unit *> us = c.units_in_range(*p, 1, 1, SELECT_UNIT_ALLY);
+
+    int d6 = c.player_roll_d6(c.self());
+    int effect = c.d6_gradations(d6, {{0, 1}, {3, 2}, {5, -1}});
+    if (effect > 0) {
+        int n = min(effect, (int)us.size());
+        us = c.player_must_select_units(us, n, n);
+    }
+    for (unit *u : us)
+        u->gain_token(TOKEN_SPEED);
+    return c.action_resolved();
+}
+
+
+// Melee. Slay an adjacent allied unit. Gain 1 strength, 1 speed, and may MOVE again.
+action_result cannibalize(combat &c)
+{
+    list<unit *> us = c.self().units_in_range(1, 1, SELECT_UNIT_ALLY);
+
+    bool vor = c.self().has_upgrade(UPGRADE_VORACIOUS);
+    if (vor) {
+        for (unit *u : c.self().units_in_range(1, 1, enum_or(SELECT_UNIT_FOE, SELECT_UNIT_WITH_HP_1_OR_LOWER))) {
+            if (find(us.begin(), us.end(), u) == us.end())
+                us.push_back(u);
+        }
+    }
+
+    if (us.empty())
+        return c.action_prevented(action_prevented::NO_TARGET);
+
+    unit *u = c.player_must_select_unit(us);
+    if (!u)
+        return c.action_failed();
+
+    u->set_slain(true);
+    if (u->is_ally(c.self())) {
+        c.self().gain_token(TOKEN_STRENGTH);
+        c.self().gain_token(TOKEN_SPEED);
+    }
+    if (c.player_may_take_action(TAKE_ACTION_MOVE_AGAIN))
+        c.unit_move_again(c.self());
+
+    return c.action_resolved();
+}
+
+
+action_result sinew(combat &c)
+{
+    if (!c.self().has_upgrade(UPGRADE_SINEW))
+        return c.action_prevented(action_prevented::NO_UPGRADE);
+
+    bool was = c.self().trait(TRAIT_SINEW);
+    bool will = c.self().hp() <= 1;
+    if (was == will)
+        return c.action_resolved(action_resolved::PREMATURELY);
+
+    int inc = will ? +1 : -1;
+    c.self().inc_trait(TRAIT_SINEW, inc);
+    c.self().inc_trait(TRAIT_IMMUNE_TO_LINE_DAMAGE, inc);
+    c.self().inc_trait(TRAIT_IMMUNE_TO_SPLASH_DAMAGE, inc);
+    c.self().inc_trait(TRAIT_IMMUNE_TO_GRAZE_DAMAGE, inc);
+    return c.action_resolved();
+}
+
+
+// Curse, Range 1-3. Target enemy counts as having +2 allied units adjacent until reused or this unit is slain.
+action_result paranoia(combat &c)
+{
+    return c.action_unimplemented();
+}
+
+
+// Self. Splash (self): 1 curse damage. Push all units 1 (5+) or 2 spaces.
+action_result sonic_screech(combat &c)
+{
+    return c.action_unimplemented();
+}
+
+
+// Self. Until next turn, adjacent enemies take -1D on attacks and allies adjacent are immune to graze damage.
+action_result sirens_song(combat &c)
+{
+    return c.action_unimplemented();
+}
+
+
+// Self. Step 2, then create a wall in an adjacent free space. (4+): gain 1 speed.
+action_result prepare_the_pole(combat &c)
+{
+    return c.action_unimplemented();
+}
+
+
+// Attack, melee. On hit: 2 damage. Rip Apart (3+): with piercing. Rip Apart (5+): deal 1 damage again and summon a Flock adjacent to target.
+action_result hang_for_the_owls(combat &c)
+{
+    return c.action_unimplemented();
+}
+
+
+// Attack, melee. On hit: 2 damage. Rip Apart (3+): +1 damage. Rip Apart (5+): +1 damage and obliterate if slain.
+action_result guzzle(combat &c)
+{
+    return c.action_unimplemented();
+}
+
+
+// Self. Splash (self): 1 damage. For each unit slain, clear one token and gain 1 speed or strength. Step 1 per slain unit and may destroy walls during this movement.
+action_result fleshgorger(combat &c)
+{
+    return c.action_unimplemented();
+}
+
+
+// Range 2-4. Splash (target): deal 1 curse damage once for each wall in the area. The same unit may be targeted multiple times.
+action_result concussive_shriek(combat &c)
+{
+    return c.action_unimplemented();
+}
+
+
+// Attack, melee. On hit: 1 damage. Rip Apart (3+): +1 damage. Rip Apart (5+): +1 damage. May spend speed to reduce Rip Apart costs by 1 each.
+action_result flense(combat &c)
+{
+    return c.action_unimplemented();
+}
+
+
+// Self. Until end of next turn, after an adjacent unit is slain, summon a Flock in range. May trigger only once per turn.
+action_result feeding_call(combat &c)
+{
+    return c.action_unimplemented();
+}
+
+
+// Self. Until this unit MOVEs or steps, foes ending a MOVE or ACT adjacent take 1 piercing damage. On slay, gain 1 speed. Triggers once per turn.
+action_result horrendous_pecking(combat &c)
+{
+    return c.action_unimplemented();
+}
+
+
+// Gains additional bonuses if X or more allied units or walls are adjacent to the target, including this one.
+action_result rip_apart(combat &c)
+{
+    return c.action_unimplemented();
+}
+
+
+// For every unit slot spent on Flock, summon an additional Flock adjacent to an allied unit at the end of every round.
+action_result endless(combat &c)
+{
+    int slots = c.player_unit_slots_spent_on(FACTION_STEEPLEWRACK, UNIT_THRALL);
+    if (c.trigger() == TRIGGER_ROUND_START) {
+        c.self().set_trait(TRAIT_ENDLESS_CHARGE, slots);
+        return c.action_resolved();
+    }
+    if (c.trigger() != TRIGGER_ROUND_END)
+        return c.action_unreachable();
+
+    if (!c.self().trait(TRAIT_ENDLESS_CHARGE))
+        return c.action_prevented(action_prevented::ALREADY_USED);
+
+    list<unit *> us = c.self().units_in_range(0, 999, enum_or(SELECT_UNIT_NO_FOE, SELECT_UNIT_IGNORE_LINE_OF_SIGHT));
+    if (us.empty())
+        return c.action_prevented(action_prevented::NO_TARGET);
+
+    set<map_space *> ps;
+    for (unit *u : us) {
+        u->set_trait(TRAIT_ENDLESS_CHARGE, 0);
+        list<map_space *> ap = u->spaces_in_range(0, 1, SELECT_SPACE_FREE);
+        ps.insert(ap.begin(), ap.end());
+    }
+
+    list<map_space *> psl(ps.begin(), ps.end());
+    psl.sort();
+    if (psl.empty())
+        return c.action_prevented(action_prevented::NO_TARGET);
+
+    map_space *p = c.player_must_select_space(psl);
+    if (!p)
+        return c.action_failed();
+
+    c.summon(*p, flock);
+    return c.action_resolved();
+}
+
+
+// May spend a speed token when attacked by an ACT ability to give the attacker -1D and step 1 after resolution.
+action_result feral_dodge(combat &c)
+{
+    return c.action_unimplemented();
+}
+
+
+// May move through walls but not end movement in them. Moving through a wall grants free movement until end of turn.
+action_result long_stilts(combat &c)
+{
+    return c.action_unimplemented();
+}
+
+
+// Arrives at the start of round 3 in any free space. May destroy walls beneath itself before placement.
+action_result circling(combat &c)
+{
+    return c.action_unimplemented();
+}
+
+
+// Counts as two allied units for Rip Apart purposes, but not to itself.
+action_result flesh_sacrifice(combat &c)
+{
+    return c.action_unimplemented();
+}
+
+
+// Counts as a wall. Blocks line of sight and provides cover. Cannot be destroyed by wall-destruction effects.
+action_result longlegs(combat &c)
+{
+    return c.action_unimplemented();
+}
+
+
 // *** UNITS ***
 void gunwight(unit_card &c)
 {
@@ -7189,6 +7646,121 @@ void chirurgeon(unit_card &c)
     c.add_upgrade_soul_ability(enum_or(TRIGGER_SOUL_ANY_TURN, TRIGGER_TURN_END), recycle);
     c.add_upgrade_soul_ability(enum_or(TRIGGER_SOUL_FOE_TURN, TRIGGER_TURN_START), devolve);
     c.add_upgrade_soul_ability(enum_or(TRIGGER_SOUL_OWN_TURN, TRIGGER_TURN_START), final_form);
+}
+
+
+void flock(unit_card &c)
+{
+    c.set_faction_type(FACTION_STEEPLEWRACK, UNIT_THRALL);
+    c.set_stats(3, 1, 5, ARMOR_NONE);
+
+    c.add_trait(enum_or(TRIGGER_ROUND_START, TRIGGER_ROUND_END), endless);
+    c.add_trait(TRIGGER_COMBAT_START, thrall);
+    c.add_trait(TRIGGER_ROUND_START, blood_frenzy);
+
+    c.add_act_ability(bloodletting);
+    c.add_act_ability(call_to_feast);
+
+    c.add_upgrade(UPGRADE_THE_RED_WET_HUE);
+    c.add_upgrade(UPGRADE_BLOOD_FRENZY);
+    c.add_upgrade(UPGRADE_RABID);
+}
+
+
+void harpy(unit_card &c)
+{
+    c.set_faction_type(FACTION_STEEPLEWRACK, UNIT_SCION);
+    c.set_stats(4, 4, 4, ARMOR_NONE);
+
+    c.add_trait(enum_or(TRIGGER_BEFORE_ATTACKED, TRIGGER_AFTER_ATTACKED), feral_dodge);
+    c.add_trait(TRIGGER_AFTER_HP_CHANGED, sinew);
+
+    c.add_act_ability(disembowel);
+    c.add_act_ability(raise_roost);
+    c.add_act_ability(cannibalize);
+
+    c.add_upgrade(UPGRADE_SINEW);
+    c.add_upgrade(UPGRADE_VORACIOUS);
+    c.add_upgrade(UPGRADE_THE_NOOSE);
+}
+
+
+void siren(unit_card &c)
+{
+    c.set_faction_type(FACTION_STEEPLEWRACK, UNIT_FREAK);
+    c.set_stats(4, 3, 5, ARMOR_MAG);
+
+    c.add_trait(TRIGGER_COMBAT_START, flight);
+
+    c.add_act_ability(paranoia);
+    c.add_act_ability(sonic_screech);
+    c.add_act_ability(sirens_song);
+
+    c.add_upgrade(UPGRADE_EAR_SPLITTER);
+    c.add_upgrade(UPGRADE_PAINFUL_WHISPERS);
+    c.add_upgrade(UPGRADE_LULLABY);
+}
+
+
+void stiltwalker(unit_card &c)
+{
+    c.set_faction_type(FACTION_STEEPLEWRACK, UNIT_HORROR);
+    c.set_stats(4, 3, 5, ARMOR_MAG);
+
+    c.add_trait(TRIGGER_COMBAT_START, long_stilts);
+
+    c.add_act_ability(prepare_the_pole);
+    c.add_act_ability(hang_for_the_owls);
+
+    c.add_upgrade(UPGRADE_PERCHING);
+    c.add_upgrade(UPGRADE_WRITHING);
+    c.add_upgrade(UPGRADE_CLINGING);
+}
+
+
+void carniphargous_owl(unit_card &c)
+{
+    c.set_faction_type(FACTION_STEEPLEWRACK, UNIT_TYRANT);
+    c.set_stats(4, 5, 4, ARMOR_SUPER);
+
+    c.add_trait(TRIGGER_COMBAT_START, circling);
+    c.add_trait(TRIGGER_COMBAT_START, flesh_sacrifice);
+    c.add_trait(TRIGGER_COMBAT_START, large);
+
+    c.add_act_ability(guzzle);
+    c.add_act_ability(fleshgorger);
+    c.add_act_ability(concussive_shriek);
+
+    c.add_upgrade(UPGRADE_MESSY_ARRIVAL);
+    c.add_upgrade(UPGRADE_SLEEK_OWL);
+    c.add_upgrade(UPGRADE_BONE_RESONANCE);
+}
+
+
+void great_stork(unit_card &c)
+{
+    c.set_faction_type(FACTION_STEEPLEWRACK, UNIT_SCION);
+    c.set_stats(3, 3, 3, ARMOR_NONE);
+
+    c.add_trait(TRIGGER_COMBAT_START, longlegs);
+
+    c.add_act_ability(flense);
+    c.add_act_ability(feeding_call);
+    c.add_act_ability(horrendous_pecking);
+
+    c.add_upgrade(UPGRADE_ENTRAIL_SCATTER);
+    c.add_upgrade(UPGRADE_JITTER);
+    c.add_upgrade(UPGRADE_WOLF_DOWN);
+}
+
+
+void haruspex(unit_card &c)
+{
+    c.set_faction_type(FACTION_STEEPLEWRACK, UNIT_NECROMANCER);
+    c.set_stats(4, 8, 5, ARMOR_NONE);
+
+    c.add_trait(enum_or(TRIGGER_ROUND_START, TRIGGER_ROUND_END), dive_bomb);
+    c.add_trait(TRIGGER_COMBAT_START, flesh_sacrifice);
 }
 
 
