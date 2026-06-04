@@ -277,6 +277,10 @@ enum trait_id
     TRAIT_DIVE_BOMB_RABID_CHARGE,
     TRAIT_ENDLESS_CHARGE,
     TRAIT_SINEW,
+    // counts as having +2 for related unit rip_apart
+    TRAIT_PARANOIA,
+    TRAIT_AURA_MINUS_1D_FOR_ALL_FOE_ATTACKS,
+    TRAIT_AURA_IMMUNE_TO_GRAZE_DAMAGE,
 };
 
 
@@ -296,7 +300,7 @@ enum select_unit_filter
     SELECT_UNIT_WITH_MUTATION_TOKENS = 1 << 9,
     SELECT_UNIT_WITH_PLAGUE_TOKENS = 1 << 10,
     SELECT_UNIT_WITH_VITALITY_TOKENS = 1 << 11,
-    SELECT_UNIT_NO_CURSEPROOF = 1 << 12,
+    SELECT_UNIT_FOR_CURSE = 1 << 12,
     SELECT_UNIT_WITH_DEATHBURST = 1 << 13,
     SELECT_UNIT_ISOLATED = 1 << 14,
     SELECT_UNIT_WITH_HP_1_OR_LOWER = 1 << 15,
@@ -736,6 +740,10 @@ struct unit
     virtual void set_trait(trait_id c, int x) = 0;
     virtual int trait(trait_id c) const = 0;
 
+    virtual void add_trait_related_unit(trait_id, unit *) = 0;
+    virtual void remove_trait_related_unit(trait_id, unit *) = 0;
+    virtual bool has_trait_related_unit(trait_id, unit *) const = 0;
+
     virtual void inc_trait_after(trait_id c, int x, trigger_type by_trigger, int after_n_triggers) = 0;
     virtual void set_trait_after(trait_id c, int x, trigger_type by_trigger, int after_n_triggers) = 0;
 
@@ -1094,7 +1102,7 @@ action_result regurgitate_ammo(combat &c)
 // Curse, Range 1-3. Effect: Unit takes 1 damage after any ACT ability resolves that pushes or pulls them. Lasts until end of this unit's next turn or until this unit has taken 3 damage this way.
 action_result bone_shards(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, 3, enum_or(SELECT_UNIT_NO_WALL, SELECT_UNIT_NO_CURSEPROOF));
+    list<unit *> us = c.self().units_in_range(1, 3, enum_or(SELECT_UNIT_NO_WALL, SELECT_UNIT_FOR_CURSE));
     if (us.empty())
         return c.action_prevented(action_prevented::NO_TARGET);
 
@@ -1214,7 +1222,7 @@ action_result deathmark(combat &c)
 {
     bool gun = c.self().trait(TRAIT_TRANSFORM_TO_GUN);
     int max_range = gun ? 6 : 4;
-    list<unit *> us = c.self().units_in_range(2, max_range, SELECT_UNIT_NO_CURSEPROOF);
+    list<unit *> us = c.self().units_in_range(2, max_range, SELECT_UNIT_FOR_CURSE);
     if (us.empty())
         return c.action_prevented(action_prevented::NO_TARGET);
 
@@ -1847,7 +1855,7 @@ action_result wild_slashes(combat &c)
 // Curse, Range 1-3. Effect: Unit gains 2 berserk or 2 speed.
 action_result pain_frenzy(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_NO_CURSEPROOF);
+    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_FOR_CURSE);
     if (us.empty())
         return c.action_prevented(action_prevented::NO_TARGET);
 
@@ -1867,7 +1875,7 @@ action_result pain_frenzy(combat &c)
 // Curse, Range 1-3. Effect: Clear all negative tokens on self or a unit, then deal 1 piercing fire damage to them. This damage can't slay a unit.
 action_result cauterize(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(3, enum_or(SELECT_UNIT_NO_CURSEPROOF, SELECT_UNIT_WITH_NEGATIVE_TOKENS));
+    list<unit *> us = c.self().units_in_range(3, enum_or(SELECT_UNIT_FOR_CURSE, SELECT_UNIT_WITH_NEGATIVE_TOKENS));
     if (us.empty())
         return c.action_prevented(action_prevented::NO_TARGET);
 
@@ -2348,7 +2356,7 @@ action_result rotblade(combat &c)
 // Curse, Range 1-3. Effect: Unit permanently gains death burst: splash (self): 1 toxic damage and 1 plague. This effect cannot stack with itself but stacks with other death burst effects.
 action_result suppurate(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_NO_CURSEPROOF);
+    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_FOR_CURSE);
     if (us.empty())
         return c.action_prevented(action_prevented::NO_TARGET);
 
@@ -2371,7 +2379,7 @@ action_result evolve_strain(combat &c)
     if (c.self().has_upgrade(UPGRADE_PANDEMIC)) {
         all = false;
     } else {
-        us = c.self().units_in_range(1, 3, enum_or(SELECT_UNIT_NO_CURSEPROOF, SELECT_UNIT_WITH_MUTATION_TOKENS));
+        us = c.self().units_in_range(1, 3, enum_or(SELECT_UNIT_FOR_CURSE, SELECT_UNIT_WITH_MUTATION_TOKENS));
         if (us.empty())
             return c.action_prevented(action_prevented::NO_TARGET);
 
@@ -2731,7 +2739,7 @@ action_result tombraiser(combat &c)
 // Range 2-4. Effect: Pull 1, ignoring line of sight. If pulling a unit into a wall, pull 3 instead and the kidnapped unit can pass through walls and units during this pull.
 action_result kidnap(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(2, 4, enum_or(SELECT_UNIT_IGNORE_LINE_OF_SIGHT, SELECT_UNIT_NO_CURSEPROOF));
+    list<unit *> us = c.self().units_in_range(2, 4, enum_or(SELECT_UNIT_IGNORE_LINE_OF_SIGHT, SELECT_UNIT_FOR_CURSE));
     if (us.empty())
         return c.action_prevented(action_prevented::NO_TARGET);
 
@@ -2777,7 +2785,7 @@ action_result serpents_kiss(combat &c)
 // Curse, Self. Curse: Splash (self): foes gain 1 weak, (5+) and are Doomed. Doomed units take 1 curse damage.
 action_result horrendous_shriek(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, 1, enum_or(SELECT_UNIT_NO_CURSEPROOF, SELECT_UNIT_NO_ALLY));
+    list<unit *> us = c.self().units_in_range(1, 1, enum_or(SELECT_UNIT_FOR_CURSE, SELECT_UNIT_NO_ALLY));
     if (us.empty())
         return c.action_prevented(action_prevented::NO_TARGET);
 
@@ -2799,7 +2807,7 @@ action_result horrendous_shriek(combat &c)
     if (c.self().has_upgrade(UPGRADE_CONDEMN)) {
         if (!c.then())
             return c.action_resolved(action_resolved::PREMATURELY);
-        list<unit *> us = c.self().units_in_range(1, 1, enum_or(SELECT_UNIT_NO_CURSEPROOF, SELECT_UNIT_NO_ALLY, SELECT_UNIT_WITH_HP_1_OR_LOWER));
+        list<unit *> us = c.self().units_in_range(1, 1, enum_or(SELECT_UNIT_FOR_CURSE, SELECT_UNIT_NO_ALLY, SELECT_UNIT_WITH_HP_1_OR_LOWER));
         unit *u = c.player_must_select_unit(us);
         if (u)
             c.obliterate(*u);
@@ -2890,7 +2898,7 @@ action_result tombstone(combat &c)
 // Curse, Range 1-4, requires isolated unit. Effect: Choose an isolated unit. That unit gains 2 weak and may no longer MOVE or step until the end of its next turn or unit it's no longer isolated.
 action_result hells_grasp(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, 4, enum_or(SELECT_UNIT_NO_CURSEPROOF, SELECT_UNIT_ISOLATED));
+    list<unit *> us = c.self().units_in_range(1, 4, enum_or(SELECT_UNIT_FOR_CURSE, SELECT_UNIT_ISOLATED));
     if (us.empty())
         return c.action_prevented(action_prevented::NO_TARGET);
 
@@ -2908,7 +2916,7 @@ action_result hells_grasp(combat &c)
 // Curse, Range 2-4. Effect: Unit gains 1 weak and is pulled 3.
 action_result beckon_lamb(combat &c)
 {
-    select_unit_filter f = c.self().has_upgrade(UPGRADE_TO_THE_SLAUGHTER) ? enum_or(SELECT_UNIT_NO_CURSEPROOF, SELECT_UNIT_IF_ISOLATED_MAX_RANGE_INF) : SELECT_UNIT_NO_CURSEPROOF;
+    select_unit_filter f = c.self().has_upgrade(UPGRADE_TO_THE_SLAUGHTER) ? enum_or(SELECT_UNIT_FOR_CURSE, SELECT_UNIT_IF_ISOLATED_MAX_RANGE_INF) : SELECT_UNIT_FOR_CURSE;
     list<unit *> us = c.self().units_in_range(2, 4, f);
     if (us.empty())
         return c.action_prevented(action_prevented::NO_TARGET);
@@ -5169,7 +5177,7 @@ action_result virulence(combat &c)
 // Curse, Range 1-3. Effect: Unit takes 1 toxic damage, ignoring armor. If this reduces it to 0 HP, it is obliterated and it melts, creating a hazard in its space.
 action_result melt(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_NO_CURSEPROOF);
+    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_FOR_CURSE);
     if (us.empty())
         return c.action_prevented(action_prevented::NO_TARGET);
 
@@ -5335,7 +5343,7 @@ action_result necrocide(combat &c)
 // (1 SOUL) Curse, Any turn, Range 1-3. Trigger: Turn start. Effect: Grant 2 plague tokens to a unit in range.
 action_result infest(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_NO_CURSEPROOF);
+    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_FOR_CURSE);
     if (us.empty())
         return c.action_prevented(action_prevented::NO_TARGET);
 
@@ -5412,7 +5420,7 @@ action_result purge_guts(combat &c)
 // (1 SOUL) Curse, Any turn, Range 1-3. Trigger: Turn start. Unit gains 1 slow and creates a hazard under themselves at the end of this turn.
 action_result insides_out(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_NO_CURSEPROOF);
+    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_FOR_CURSE);
     if (us.empty())
         return c.action_prevented(action_prevented::NO_TARGET);
 
@@ -5461,7 +5469,7 @@ action_result fecundity(combat &c)
 // (3 SOUL) Curse, Any turn, Range 1-3. Trigger: Target turn start. At the end of the targeted unit's turn, targeted unit takes 1 piercing toxic damage for every hazard in range 2 of them.
 action_result unholy_vapors(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_NO_CURSEPROOF);
+    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_FOR_CURSE);
     if (us.empty())
         return c.action_prevented(action_prevented::NO_TARGET);
 
@@ -5620,7 +5628,7 @@ action_result doomblade(combat &c)
 // Curse, Range 2-4. Effect: Pull 2. Ignores line of sight. If the unit is an ally, may then pull another allied unit and clear a token on both allies.
 action_result unholy_summoning(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(2, 4, enum_or(SELECT_UNIT_NO_CURSEPROOF, SELECT_UNIT_IGNORE_LINE_OF_SIGHT));
+    list<unit *> us = c.self().units_in_range(2, 4, enum_or(SELECT_UNIT_FOR_CURSE, SELECT_UNIT_IGNORE_LINE_OF_SIGHT));
     if (us.empty())
         return c.action_prevented(action_prevented::NO_TARGET);
 
@@ -5635,7 +5643,7 @@ action_result unholy_summoning(combat &c)
 
     list<unit *> allies = {u};
 
-    us = c.self().units_in_range(2, 4, enum_or(SELECT_UNIT_NO_CURSEPROOF, SELECT_UNIT_IGNORE_LINE_OF_SIGHT, SELECT_UNIT_NO_FOE));
+    us = c.self().units_in_range(2, 4, enum_or(SELECT_UNIT_FOR_CURSE, SELECT_UNIT_IGNORE_LINE_OF_SIGHT, SELECT_UNIT_NO_FOE));
     us.remove(u);
     u = c.player_may_select_unit(us);
     if (u) {
@@ -5675,7 +5683,7 @@ action_result vapor_form(combat &c)
 // Tear Soul: Curse, Range 1-3. Effect: Unit takes 1 curse damage. Then, it gains 1 weak for every 1 HP it is missing. If it’s missing more than half its HP, it is then Doomed.
 action_result tear_soul(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_NO_CURSEPROOF);
+    list<unit *> us = c.self().units_in_range(1, 3, SELECT_UNIT_FOR_CURSE);
     if (us.empty())
         return c.action_prevented(action_prevented::NO_TARGET);
 
@@ -5887,7 +5895,7 @@ action_result twist_sinews(combat &c)
 // (1 SOUL) Foe turn, Curse, Range 1-4. Trigger: Turn start. At the end of their turn, foe inflicts splash(self) 1 curse damage and 1 weak, only affecting their allies.
 action_result writhing_curse(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, 4, enum_or(SELECT_UNIT_FOE, SELECT_UNIT_NO_CURSEPROOF));
+    list<unit *> us = c.self().units_in_range(1, 4, enum_or(SELECT_UNIT_FOE, SELECT_UNIT_FOR_CURSE));
     if (us.empty())
         return c.action_prevented(action_prevented::NO_TARGET);
 
@@ -6143,7 +6151,7 @@ action_result communion(combat &c)
 // Curse, Self. Effect: Until end of next turn, foes ending their turn in range 2 of this unit have a hazard created under them, then are pushed 1.
 action_result decree_of_forbiddance(combat &c)
 {
-    list<unit *> us = c.self().units_in_range(1, 999, enum_or(SELECT_UNIT_FOE, SELECT_UNIT_NO_CURSEPROOF, SELECT_UNIT_IGNORE_LINE_OF_SIGHT));
+    list<unit *> us = c.self().units_in_range(1, 999, enum_or(SELECT_UNIT_FOE, SELECT_UNIT_FOR_CURSE, SELECT_UNIT_IGNORE_LINE_OF_SIGHT));
     if (us.empty())
         return c.action_prevented(action_prevented::NO_TARGET);
     for (unit *u : us) {
@@ -6679,24 +6687,90 @@ action_result sinew(combat &c)
 }
 
 
+action_result remove_paranoia(combat &c)
+{
+    int inc = c.self().has_upgrade(UPGRADE_PAINFUL_WHISPERS) ? -1 : -2;
+    for (unit *u : c.self().units_in_range(0, 999, SELECT_UNIT_IGNORE_LINE_OF_SIGHT)) {
+        if (u->has_trait_related_unit(TRAIT_PARANOIA, &c.self())) {
+            u->remove_trait_related_unit(TRAIT_PARANOIA, &c.self());
+            u->inc_trait(TRAIT_PARANOIA, inc);
+            return c.action_resolved();
+        }
+    }
+    return c.action_prevented(action_prevented::NO_TARGET);
+}
+
+
 // Curse, Range 1-3. Target enemy counts as having +2 allied units adjacent until reused or this unit is slain.
 action_result paranoia(combat &c)
 {
-    return c.action_unimplemented();
+    list<unit *> units = c.self().units_in_range(1, 3, enum_or(SELECT_UNIT_FOE, SELECT_UNIT_FOR_CURSE));
+    if (units.empty())
+        return c.action_prevented(action_prevented::NO_TARGET);
+
+    unit *u = c.player_must_select_unit(units);
+    if (!u)
+        return c.action_failed();
+
+    remove_paranoia(c);
+
+    bool pain = c.self().has_upgrade(UPGRADE_PAINFUL_WHISPERS);
+    int inc = pain ? +1 : +2;
+    if (pain)
+        u->take_damage(1, enum_or(DAMAGE_CURSE, DAMAGE_PIERCING), &c.self());
+    u->inc_trait(TRAIT_PARANOIA, inc);
+    u->add_trait_related_unit(TRAIT_PARANOIA, &c.self());
+    return c.action_resolved();
 }
 
 
 // Self. Splash (self): 1 curse damage. Push all units 1 (5+) or 2 spaces.
 action_result sonic_screech(combat &c)
 {
-    return c.action_unimplemented();
+    if (c.self().has_upgrade(UPGRADE_EAR_SPLITTER)) {
+        list<unit *> us = c.self().units_in_range(1, 1, SELECT_UNIT_ALLY);
+        if (!us.empty()) {
+            us = c.player_must_select_units(us, 1, max((int)us.size(), 2));
+            if (us.empty())
+                return c.action_failed();
+        }
+        for (unit *u : us) {
+            optional<token_type> tt = c.player_must_select_token_type({TOKEN_STRENGTH, TOKEN_SPEED});
+            if (!tt)
+                return c.action_failed();
+            u->gain_token(*tt);
+        }
+        return c.action_resolved();
+    }
+
+    list<unit *> us = c.self().units_in_range(1, 1);
+    int d6 = c.player_roll_d6(c.self());
+    for (unit *u : us) {
+        u->take_damage(1, DAMAGE_CURSE, &c.self());
+        u->push(c.self(), d6 >= 5 ? 2 : 1);
+    }
+    return c.action_resolved();
 }
 
 
 // Self. Until next turn, adjacent enemies take -1D on attacks and allies adjacent are immune to graze damage.
 action_result sirens_song(combat &c)
 {
-    return c.action_unimplemented();
+    list<trait_id> ts = {
+        TRAIT_AURA_MINUS_1D_FOR_ALL_FOE_ATTACKS,
+        TRAIT_AURA_IMMUNE_TO_GRAZE_DAMAGE,
+        TRAIT_IMMUNE_TO_GRAZE_DAMAGE,
+    };
+    for (trait_id t : ts) {
+        c.self().inc_trait(t, +1);
+        c.self().inc_trait_after(t, -1, TRIGGER_TURN_START, 1);
+    }
+    if (c.self().has_upgrade(UPGRADE_LULLABY)) {
+        list<unit *> us = c.self().units_in_range(1, 1, SELECT_UNIT_ALLY);
+        for (unit *u : us)
+            u->gain_token(TOKEN_SPEED);
+    }
+    return c.action_resolved();
 }
 
 
@@ -7691,6 +7765,7 @@ void siren(unit_card &c)
     c.set_stats(4, 3, 5, ARMOR_MAG);
 
     c.add_trait(TRIGGER_COMBAT_START, flight);
+    c.add_trait(TRIGGER_BEFORE_SLAINED, remove_paranoia);
 
     c.add_act_ability(paranoia);
     c.add_act_ability(sonic_screech);
