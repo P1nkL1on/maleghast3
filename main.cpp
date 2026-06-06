@@ -67,6 +67,7 @@ enum take_action
     TAKE_ACTION_REMOVE_NEGATIVE_TOKEN,
     TAKE_ACTION_SUMMON_FLOCK,
     TAKE_ACTION_DIVE_BOMB,
+    TAKE_ACTION_FERAL_DODGE,
 };
 
 
@@ -115,6 +116,7 @@ enum damage_type
     DAMAGE_CANT_SLAY,
     DAMAGE_OBLITERATE_ON_SLAY,
     DAMAGE_CANT_BENEFIT_FROM_STRENGTH,
+    DAMAGE_IGNORE_VITALITY,
 
     // for a special case: devil damage of homonculus:absorb with mold upgrade
     DAMAGE_SLAY_ON_OBLITERATE,
@@ -186,7 +188,7 @@ enum trait_id
     TRAIT_ALTERED_MV,
     TRAIT_ALTERED_DF,
     TRAIT_FLIGHT,
-    TRAIT_IS_2X2,
+    TRAIT_IS_LARGE,
     TRAIT_COST_HALF_UNIT_SLOT,
     TRAIT_ACTIVATED_TWO_AT_A_TIME,
     TRAIT_LEAVE_HAZARD_INSTEAD_OF_CORPSE,
@@ -281,6 +283,9 @@ enum trait_id
     TRAIT_PARANOIA,
     TRAIT_AURA_MINUS_1D_FOR_ALL_FOE_ATTACKS,
     TRAIT_AURA_IMMUNE_TO_GRAZE_DAMAGE,
+    TRAIT_CLINGING,
+    // counts as two allied units for the purposes of Rip Apart, but not to itself
+    TRAIT_FLESH_SACRIFICE,
 };
 
 
@@ -674,6 +679,7 @@ struct map_space
     virtual void inc_corpses(int) = 0;
 
     virtual map_space *adjacent(direction) const = 0;
+    virtual list<map_space *> spaces_in_range(int, int, select_space_filter = SELECT_SPACE_ANY) const = 0;
 
     bool is_free() const { return !is_wall() && !unit_standing(); }
     bool passes_filter(select_space_filter) const;
@@ -728,6 +734,7 @@ struct unit
     void remove_token(token_type type, int count = 1) { return inc_token(type, -count); }
     void gain_token(token_type type, int count = 1) { return inc_token(type, count); }
 
+    virtual void deploy(const map_space &) = 0;
     virtual void teleport(int distance) = 0;
     // deduct the player, doing movement from the (unit &from host)
     virtual void push(unit &from, int distance = 1) = 0;
@@ -835,13 +842,14 @@ struct combat
     virtual map_space *player_must_select_space(const map_space *, int range, select_space_filter filter = SELECT_SPACE_ANY) = 0;
     virtual map_space *player_must_select_space(const map_space *, int min, int max, select_space_filter filter = SELECT_SPACE_ANY) = 0;
     virtual map_space *player_must_select_space(const list<map_space *> &spaces, select_space_filter filter = SELECT_SPACE_ANY) = 0;
+    virtual map_space *player_must_select_any_space(select_space_filter filter = SELECT_SPACE_ANY) = 0;
     virtual list<map_space *> player_must_select_spaces(const map_space *, int up_to, int min, int max, select_space_filter filter = SELECT_SPACE_ANY) = 0;
     virtual optional<direction> player_must_select_direction() = 0;
     virtual bool player_may_take_action(take_action) = 0;
     virtual bool player_may_spend_soul(int x) = 0;
     virtual int player_roll_d6(unit &who, roll_tag tags = ROLL_TAG_NONE, int extra_mod = 0) = 0;
 
-    virtual int d6_gradations(int d6, const map<int, int> &treshold_to_result = {}) const = 0;
+    virtual int effect_gradations(int d6, const map<int, int> &treshold_to_result = {}) const = 0;
     virtual bool is_headshot(int d6) const = 0;
     // how much unit slots were spent on pre-combat buying phase on the exact unit
     virtual int player_unit_slots_spent_on(unit_faction, unit_type) const = 0;
@@ -1091,7 +1099,7 @@ action_result regurgitate_ammo(combat &c)
         return c.action_failed();
 
     int d6 = c.player_roll_d6(c.self());
-    int x = c.d6_gradations(d6, {{0, 1}, {6, 2}});
+    int x = c.effect_gradations(d6, {{0, 1}, {6, 2}});
 
     c.reload(*u);
     u->gain_token(TOKEN_STRENGTH, x);
@@ -1115,7 +1123,7 @@ action_result bone_shards(combat &c)
 
     if (c.self().has_upgrade(UPGRADE_VOMIT_BULLETS)) {
         int d6 = c.player_roll_d6(c.self());
-        int n = c.d6_gradations(d6, {{0, 0}, {4, 1}, {6, 1}});
+        int n = c.effect_gradations(d6, {{0, 0}, {4, 1}, {6, 1}});
         while (n--)
             u->push(c.self(), 1);
     }
@@ -1259,7 +1267,7 @@ action_result juggernaut(combat &c)
         return c.action_prevented(action_prevented::NO_TARGET);
 
     int d6 = c.player_roll_d6(c.self());
-    int push = c.d6_gradations(d6, {{0, 1}, {5, 2}});
+    int push = c.effect_gradations(d6, {{0, 1}, {5, 2}});
     for (unit *u : us)
         u->push(c.self(), push);
     return c.action_resolved();
@@ -1689,7 +1697,7 @@ action_result warpflesh(combat &c)
 // 2x2 unit
 action_result large(combat &c)
 {
-    c.self().set_trait(TRAIT_IS_2X2, 1);
+    c.self().set_trait(TRAIT_IS_LARGE, 1);
     return c.action_resolved();
 }
 
@@ -1830,7 +1838,7 @@ action_result chainsaw(combat &c)
         bool bloody = c.self().has_upgrade(UPGRADE_BLOODY_TEETH) && c.self().hp() == 0;
         damage_type type = bloody ? enum_or(DAMAGE_PIERCING, DAMAGE_PHYSICAL) : DAMAGE_PHYSICAL;
         int d6 = c.player_roll_d6(c.self());
-        int times = c.d6_gradations(d6, {{0, 1}, {4, 2}, {6, 3}});
+        int times = c.effect_gradations(d6, {{0, 1}, {4, 2}, {6, 3}});
         while (times--) {
             u->take_damage(1, type, &c.self());
             if (!c.then())
@@ -1932,7 +1940,7 @@ action_result exfoliate(combat &c)
     }
 
     int d6 = c.player_roll_d6(c.self());
-    int times = c.d6_gradations(d6, {{0, 1}, {4, 2}, {6, 3}});
+    int times = c.effect_gradations(d6, {{0, 1}, {4, 2}, {6, 3}});
     while (times--) {
         u->take_damage(1, DAMAGE_PHYSICAL, &c.self());
         if (!c.then())
@@ -2432,7 +2440,7 @@ action_result propagate_swarm(combat &c)
         c.self().remove_token(TOKEN_PLAGUE, 1);
     }
 
-    int n = c.d6_gradations(d6, {{0, 1}, {3, 2}, {5, 3}});
+    int n = c.effect_gradations(d6, {{0, 1}, {3, 2}, {5, 3}});
     while (n--) {
         map_space *p = c.player_must_select_space(c.self().space(), 3);
         if (!p)
@@ -2489,7 +2497,7 @@ action_result driving_vermin(combat &c)
 action_result percolate(combat &c)
 {
     int d6 = c.player_roll_d6(c.self());
-    int n = c.d6_gradations(d6, {{0, 2}, {5, 3}});
+    int n = c.effect_gradations(d6, {{0, 2}, {5, 3}});
     c.self().gain_token(TOKEN_PLAGUE, n);
 
     list<unit *> us = c.self().units_in_range(1, 1);
@@ -2727,7 +2735,7 @@ action_result tombraiser(combat &c)
     p->set_wall(true);
 
     int d6 = c.player_roll_d6(c.self());
-    int n = c.d6_gradations(d6, {{0, 0}, {3, 1}, {5, 2}});
+    int n = c.effect_gradations(d6, {{0, 0}, {3, 1}, {5, 2}});
     while (n--) {
         p = c.player_must_select_space(c.self().space(), 1, 2);
         if (p)
@@ -3088,7 +3096,7 @@ action_result mea_culpa(combat &c)
         return c.action_resolved(action_resolved::PREMATURELY);
 
     int d6 = c.player_roll_d6(c.self());
-    int x = c.d6_gradations(d6, {{0, 1}, {4, 2}, {6, -1}});
+    int x = c.effect_gradations(d6, {{0, 1}, {4, 2}, {6, -1}});
     int removed = 0;
     if (x == -1) {
         for (token *t : c.self().tokens()) {
@@ -3352,7 +3360,7 @@ action_result requiesce_en_pace(combat &c)
 action_result bolides(combat &c)
 {
     int d6 = c.player_roll_d6(c.self());
-    int n = c.d6_gradations(d6, {{0, 1}, {3, 2}, {5, 3}});
+    int n = c.effect_gradations(d6, {{0, 1}, {3, 2}, {5, 3}});
     bool scathe = c.self().has_upgrade(UPGRADE_SCATHE);
     while (n--) {
         map_space *p = c.player_must_select_space(c.self().space(), 2, 6);
@@ -3517,7 +3525,7 @@ action_result unstable_mutation(combat &c)
 {
     if (c.self().has_upgrade(UPGRADE_WARPING_MUTATE) && c.player_may_take_action(TAKE_ACTION_STEP)) {
         int d6 = c.player_roll_d6(c.self());
-        int x = c.d6_gradations(d6, {{0, 1}, {4, 3}});
+        int x = c.effect_gradations(d6, {{0, 1}, {4, 3}});
         c.unit_step(c.self(), x);
     }
 
@@ -3628,7 +3636,7 @@ action_result purge(combat &c)
         return c.action_resolved(action_resolved::PREMATURELY);
 
     int d6 = c.player_roll_d6(c.self());
-    int tokens = c.d6_gradations(d6, {{0, 1}, {3, 2}, {5, -1}});
+    int tokens = c.effect_gradations(d6, {{0, 1}, {3, 2}, {5, -1}});
     list<token *> stolen;
     while (tokens--) {
         token *t = c.player_may_select_token(u->tokens());
@@ -3955,7 +3963,7 @@ action_result flesh_whip(combat &c)
     for (unit *near : u->units_in_range(1, 1))
         u->take_damage(1, DAMAGE_PHYSICAL, &c.self());
 
-    int n = c.d6_gradations(d6, {{1, 0}, {4, 1}, {6, 2}});
+    int n = c.effect_gradations(d6, {{1, 0}, {4, 1}, {6, 2}});
     if (!n)
         return c.action_resolved(action_resolved::PREMATURELY);
 
@@ -4103,7 +4111,7 @@ action_result experimental_surgery(combat &c)
 action_result new_material(combat &c)
 {
     int d6 = c.player_roll_d6(c.self());
-    int cs = c.d6_gradations(d6, {{1, 1}, {3, 2}, {5, 3}});
+    int cs = c.effect_gradations(d6, {{1, 1}, {3, 2}, {5, 3}});
     int n = 0;
     while (cs--) {
         map_space *p = c.player_must_select_space(c.self().space(), 1, enum_or(SELECT_SPACE_UNIT, SELECT_SPACE_NO_WALLS));
@@ -4484,7 +4492,7 @@ action_result devolve(combat &c)
         return c.action_prevented(action_prevented::NO_SOUL);
 
     int d6 = c.player_roll_d6(c.self());
-    int times = c.d6_gradations(d6, {{1, 1}, {5, 2}});
+    int times = c.effect_gradations(d6, {{1, 1}, {5, 2}});
     while (times--) {
         u.gain_token(TOKEN_SLOW, +1);
         u.gain_token(TOKEN_WEAK, +1);
@@ -5165,7 +5173,7 @@ action_result virulence(combat &c)
     if (!c.player_may_take_action(TAKE_ACTION_VIRULENCE))
         return c.action_failed();
     d6 = c.player_roll_d6(c.self());
-    int n = c.d6_gradations(d6, {{3, 1}, {5, 2}});
+    int n = c.effect_gradations(d6, {{3, 1}, {5, 2}});
     while(n--) {
         u->remove_token(TOKEN_PLAGUE, 1);
         u->take_damage(1, DAMAGE_TOXIC, &c.self());
@@ -5303,7 +5311,7 @@ action_result scourge(combat &c)
 
 
     d6 = c.player_roll_d6(c.self());
-    int n = c.d6_gradations(d6, {{0, 0}, {3, 1}, {5, 2}});
+    int n = c.effect_gradations(d6, {{0, 0}, {3, 1}, {5, 2}});
     u->gain_token(TOKEN_SLOW, n);
     return c.action_resolved();
 }
@@ -6281,7 +6289,7 @@ action_result absolution(combat &c)
     c.self().take_damage(1, enum_or(DAMAGE_PIERCING, DAMAGE_CANT_SLAY), &c.self());
 
     int d6 = c.player_roll_d6(c.self());
-    int n = c.d6_gradations(d6, {{0, 1}, {3, 2}, {5, 2}});
+    int n = c.effect_gradations(d6, {{0, 1}, {3, 2}, {5, 2}});
     u->gain_token(TOKEN_VITALITY, n);
     return c.action_resolved();
 }
@@ -6625,7 +6633,7 @@ action_result raise_roost(combat &c)
     list<unit *> us = c.units_in_range(*p, 1, 1, SELECT_UNIT_ALLY);
 
     int d6 = c.player_roll_d6(c.self());
-    int effect = c.d6_gradations(d6, {{0, 1}, {3, 2}, {5, -1}});
+    int effect = c.effect_gradations(d6, {{0, 1}, {3, 2}, {5, -1}});
     if (effect > 0) {
         int n = min(effect, (int)us.size());
         us = c.player_must_select_units(us, n, n);
@@ -6777,21 +6785,92 @@ action_result sirens_song(combat &c)
 // Self. Step 2, then create a wall in an adjacent free space. (4+): gain 1 speed.
 action_result prepare_the_pole(combat &c)
 {
-    return c.action_unimplemented();
+    c.unit_step(c.self(), 2);
+    if (!c.then())
+        return c.action_resolved(action_resolved::PREMATURELY);
+
+    list<map_space *> ps = c.self().spaces_in_range(1, 1, SELECT_SPACE_FREE);
+    if (ps.empty())
+        return c.action_prevented(action_prevented::NO_TARGET);
+
+    map_space *p = c.player_must_select_space(ps);
+    if (!p)
+        return c.action_failed();
+
+    p->set_wall(true);
+
+    int d6 = c.player_roll_d6(c.self());
+    if (d6 >= 4)
+        c.self().gain_token(TOKEN_SPEED, +1);
+
+    return c.action_resolved();
 }
 
 
 // Attack, melee. On hit: 2 damage. Rip Apart (3+): with piercing. Rip Apart (5+): deal 1 damage again and summon a Flock adjacent to target.
 action_result hang_for_the_owls(combat &c)
 {
-    return c.action_unimplemented();
+    list<unit *> units = c.self().units_in_range(1, 1);
+    if (units.empty())
+        return c.action_prevented(action_prevented::NO_TARGET);
+
+    unit *u = c.player_must_select_unit(units);
+    if (!u)
+        return c.action_failed();
+
+    int d6 = c.player_roll_d6(*u, ROLL_TAG_ATTACK);
+    if (!c.is_hit(*u, d6)) {
+        u->take_damage(1, enum_or(DAMAGE_GRAZE, DAMAGE_PHYSICAL), &c.self());
+        return c.action_resolved(action_resolved::MISSED_A_HIT);
+    }
+
+    damage_type t = DAMAGE_PHYSICAL;
+    if (u->rip_apart_for(3))
+        t = enum_or(DAMAGE_PHYSICAL, DAMAGE_PIERCING);
+    if (c.self().has_upgrade(UPGRADE_WRITHING) && c.self().spaces_in_range(1, 1, SELECT_SPACE_WALLS).size())
+        t = enum_or(DAMAGE_PHYSICAL, DAMAGE_PIERCING, DAMAGE_IGNORE_VITALITY);
+
+    u->take_damage(2, t, &c.self());
+
+    while (u->rip_apart_for(5)) {
+        u->take_damage(1, t, &c.self());
+        list<map_space *> ps = u->spaces_in_range(1, 1, SELECT_SPACE_FREE);
+        if (ps.empty())
+            break;
+
+        map_space *p = c.player_must_select_space(ps);
+        if (!p)
+            return c.action_failed();
+
+        c.summon(*p, flock);
+        break;
+    }
+    return c.action_resolved();
 }
 
 
 // Attack, melee. On hit: 2 damage. Rip Apart (3+): +1 damage. Rip Apart (5+): +1 damage and obliterate if slain.
 action_result guzzle(combat &c)
 {
-    return c.action_unimplemented();
+    list<unit *> units = c.self().units_in_range(1, 1);
+    if (units.empty())
+        return c.action_prevented(action_prevented::NO_TARGET);
+
+    unit *u = c.player_must_select_unit(units);
+    if (!u)
+        return c.action_failed();
+
+    int d6 = c.player_roll_d6(*u, ROLL_TAG_ATTACK);
+    if (!c.is_hit(*u, d6)) {
+        u->take_damage(1, enum_or(DAMAGE_GRAZE, DAMAGE_PHYSICAL), &c.self());
+        return c.action_resolved(action_resolved::MISSED_A_HIT);
+    }
+
+    int ra = u->rip_apart_for();
+    int dmg = c.effect_gradations(ra, {{0, 2}, {3, 3}, {5, 4}});
+    damage_type t = ra >= 5 ? enum_or(DAMAGE_OBLITERATE_ON_SLAY, DAMAGE_PHYSICAL) : DAMAGE_PHYSICAL;
+    u->take_damage(dmg, t, &c.self());
+    return c.action_resolved();
 }
 
 
@@ -6879,28 +6958,105 @@ action_result endless(combat &c)
 // May spend a speed token when attacked by an ACT ability to give the attacker -1D and step 1 after resolution.
 action_result feral_dodge(combat &c)
 {
-    return c.action_unimplemented();
+    token *t = c.self().find_token(TOKEN_SPEED);
+    if (!t || t->count() <= 1)
+        return c.action_prevented(action_prevented::NO_TOKENS);
+
+    if (!c.player_may_take_action(TAKE_ACTION_FERAL_DODGE))
+        return c.action_resolved(action_resolved::PLAYER_CHOSE_NOT_TO);
+
+    c.self().remove_token(TOKEN_SPEED);
+    c.self().inc_trait(TRAIT_MINUS_1D_FROM_ALL_ATTACKS, +1);
+
+    auto a = [](combat &c) {
+        c.unit_step(c.self());
+        return c.action_resolved();
+    };
+    c.self().inc_trait_after(TRAIT_MINUS_1D_FROM_ALL_ATTACKS, -1, TRIGGER_AFTER_ATTACKED, 1);
+    c.self().do_after(a, TRIGGER_AFTER_ATTACKED, 1);
+    return c.action_resolved();
 }
 
 
 // May move through walls but not end movement in them. Moving through a wall grants free movement until end of turn.
 action_result long_stilts(combat &c)
 {
-    return c.action_unimplemented();
+    c.self().inc_trait(TRAIT_MOVEMENT_THROUGH_WALLS, +1);
+    return c.action_resolved();
+}
+
+
+action_result perching(combat &c)
+{
+    if (!c.self().has_upgrade(UPGRADE_PERCHING))
+        return c.action_prevented(action_prevented::NO_UPGRADE);
+
+    int n = c.self().spaces_in_range(1, 1, SELECT_SPACE_WALLS).size();
+    if (!n)
+        return c.action_prevented(action_prevented::CONDITION_UNSATISFIED);
+
+    c.self().gain_token(TOKEN_SPEED);
+    if (!c.self().n_tokens(enum_or(SELECT_TOKEN_NEGATIVE, SELECT_TOKEN_REMOVABLE)))
+        return c.action_resolved();
+
+    token *t = c.player_must_select_token(c.self().tokens(), enum_or(SELECT_TOKEN_NEGATIVE, SELECT_TOKEN_REMOVABLE));
+    if (!t)
+        return c.action_failed();
+    c.self().remove_token(t->type());
+    return c.action_resolved();
+}
+
+
+action_result clinging(combat &c)
+{
+    if (!c.self().has_upgrade(UPGRADE_CLINGING))
+        return c.action_prevented(action_prevented::NO_UPGRADE);
+
+    bool was = c.self().trait(TRAIT_CLINGING);
+    bool will = c.self().spaces_in_range(1, 1, SELECT_SPACE_WALLS).size();
+    if (was == will)
+        return c.action_resolved(action_resolved::PREMATURELY);
+
+    int inc = will ? +1 : -1;
+    c.self().inc_trait(TRAIT_CLINGING, inc);
+    c.self().inc_trait(TRAIT_CURSEPROOF, inc);
+    return c.action_resolved();
+}
+
+
+action_result large_or_sleek_owl(combat &c)
+{
+    if (c.self().has_upgrade(UPGRADE_SLEEK_OWL))
+        c.self().inc_trait(TRAIT_MOVEMENT_FREE, +1);
+    else
+        c.self().set_trait(TRAIT_IS_LARGE, 1);
+    return c.action_resolved();
 }
 
 
 // Arrives at the start of round 3 in any free space. May destroy walls beneath itself before placement.
 action_result circling(combat &c)
 {
-    return c.action_unimplemented();
+    if (c.round() != 3)
+        return c.action_prevented(action_prevented::CONDITION_UNSATISFIED);
+
+    map_space *p = c.player_must_select_any_space(SELECT_SPACE_NO_UNIT);
+    if (!p)
+        return c.action_failed();
+
+    for (map_space *a : p->spaces_in_range(0, 1, SELECT_SPACE_WALLS))
+        a->set_wall(false);
+
+    c.swap_unit_pos(c.self(), *p);
+    return c.action_resolved();
 }
 
 
 // Counts as two allied units for Rip Apart purposes, but not to itself.
 action_result flesh_sacrifice(combat &c)
 {
-    return c.action_unimplemented();
+    c.self().set_trait(TRAIT_FLESH_SACRIFICE, 1);
+    return c.action_resolved();
 }
 
 
@@ -7746,7 +7902,7 @@ void harpy(unit_card &c)
     c.set_faction_type(FACTION_STEEPLEWRACK, UNIT_SCION);
     c.set_stats(4, 4, 4, ARMOR_NONE);
 
-    c.add_trait(enum_or(TRIGGER_BEFORE_ATTACKED, TRIGGER_AFTER_ATTACKED), feral_dodge);
+    c.add_trait(TRIGGER_BEFORE_ATTACKED, feral_dodge);
     c.add_trait(TRIGGER_AFTER_HP_CHANGED, sinew);
 
     c.add_act_ability(disembowel);
@@ -7783,6 +7939,8 @@ void stiltwalker(unit_card &c)
     c.set_stats(4, 3, 5, ARMOR_MAG);
 
     c.add_trait(TRIGGER_COMBAT_START, long_stilts);
+    c.add_trait(TRIGGER_TURN_START, perching);
+    c.add_trait(TRIGGER_AFTER_POS_CHANGED, clinging);
 
     c.add_act_ability(prepare_the_pole);
     c.add_act_ability(hang_for_the_owls);
@@ -7798,9 +7956,9 @@ void carniphargous_owl(unit_card &c)
     c.set_faction_type(FACTION_STEEPLEWRACK, UNIT_TYRANT);
     c.set_stats(4, 5, 4, ARMOR_SUPER);
 
-    c.add_trait(TRIGGER_COMBAT_START, circling);
+    c.add_trait(TRIGGER_ROUND_START, circling);
     c.add_trait(TRIGGER_COMBAT_START, flesh_sacrifice);
-    c.add_trait(TRIGGER_COMBAT_START, large);
+    c.add_trait(TRIGGER_COMBAT_START, large_or_sleek_owl);
 
     c.add_act_ability(guzzle);
     c.add_act_ability(fleshgorger);
